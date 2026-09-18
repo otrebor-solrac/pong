@@ -23,7 +23,7 @@ from constants import (
     MAX_DX,
     MAX_DY
 )
-from rust_bridge import is_rust_available, rust_step
+from rust_bridge import is_rust_available, rust_step, rust_discretize
 
 
 class PongStateDiscretizer:
@@ -85,13 +85,17 @@ class PongStateDiscretizer:
         else:
             bin_speed = 2
 
-        state_id = (
-            bin_dx * (self.n_bins_dy * self.n_bins_vx * self.n_bins_vy * self.n_bins_speed) +
-            bin_dy * (self.n_bins_vx * self.n_bins_vy * self.n_bins_speed) +
-            bin_vx * (self.n_bins_vy * self.n_bins_speed) +
-            bin_vy * self.n_bins_speed +
-            bin_speed
-        )
+        r_state_id = rust_discretize(ball_x, ball_y, ball_vx, ball_vy, paddle_x, paddle_y)
+        if r_state_id is not None:
+            state_id = r_state_id
+        else:
+            state_id = (
+                bin_dx * (self.n_bins_dy * self.n_bins_vx * self.n_bins_vy * self.n_bins_speed) +
+                bin_dy * (self.n_bins_vx * self.n_bins_vy * self.n_bins_speed) +
+                bin_vx * (self.n_bins_vy * self.n_bins_speed) +
+                bin_vy * self.n_bins_speed +
+                bin_speed
+            )
 
         info = {
             "state_id": state_id,
@@ -152,9 +156,9 @@ class FastPongEnv:
 
     def set_opponent_speed_ratio(self, ratio: float):
         """
-        Adjust opponent speed for Curriculum Learning (0.30 to 0.95).
+        Adjust opponent speed for Curriculum Learning (0.30 to 1.0).
         """
-        self.opp_speed_ratio = float(np.clip(ratio, 0.30, 0.95))
+        self.opp_speed_ratio = float(np.clip(ratio, 0.30, 1.0))
 
     def get_continuous_state(self) -> np.ndarray:
         """
@@ -202,7 +206,11 @@ class FastPongEnv:
         else:
             self.ai_y = float(np.random.uniform(min_paddle_y, max_paddle_y))
 
-        self.opponent_y = float(np.random.uniform(min_paddle_y, max_paddle_y))
+        if dir_x < 0:
+            # When serving towards opponent, align opponent with ball so it reliably initiates a rally
+            self.opponent_y = float(np.clip(self.ball_y + np.random.uniform(-15.0, 15.0), min_paddle_y, max_paddle_y))
+        else:
+            self.opponent_y = float(np.random.uniform(min_paddle_y, max_paddle_y))
 
         state_id, info = self.discretizer.discretize(
             ball_x=self.ball_x,
@@ -283,6 +291,9 @@ class FastPongEnv:
                 self.opponent_y = max(PADDLE_HEIGHT / 2.0, self.opponent_y - opp_speed)
             elif dy_opp > 8:
                 self.opponent_y = min(FIELD_HEIGHT - PADDLE_HEIGHT / 2.0, self.opponent_y + opp_speed)
+        elif self.opponent == "fronton":
+            # In fronton mode, the left paddle acts as an impenetrable wall that always returns the ball
+            self.opponent_y = self.ball_y
 
 
 
@@ -367,16 +378,29 @@ class FastPongEnv:
         self.ball_y = state.ball_y
         self.ball_vx = state.ball_vx
         self.ball_vy = state.ball_vy
-        scored_goal = outcome.goal_p1
+        # In Rust: goal_p2 = true when ball_x < 0 (P2/AI scores goal on left)
+        scored_goal = outcome.goal_p2
         hit_ai_paddle = outcome.hit_p2
         edge_bonus = 0.0
         if hit_ai_paddle:
             self.rally_hits += 1
+            abs_offset = abs(outcome.hit_offset_p2)
+            
+            # Recompensa basada en la posición de impacto en la paleta:
+            # 1. Centro (0.0 a 0.2): Máxima recompensa por tiro seguro
+            # 2. Casi esquinas (0.2 a 0.85): Menor recompensa
+            # 3. Extremos (> 0.85): Recompensa media para incitar tiros con rebote
+            if abs_offset < 0.2:
+                edge_bonus += 2.0
+            elif abs_offset > 0.85:
+                edge_bonus += 1.0
+            else:
+                edge_bonus += 0.0
+
             if abs(self.ball_vy) > 3.0:
-                edge_bonus += (abs(self.ball_vy) / MAX_BALL_SPEED) * 2.5
-            if abs(outcome.hit_offset_p2) > 0.45:
-                edge_bonus += abs(outcome.hit_offset_p2) * 2.0
-        missed_ball = outcome.goal_p2
+                edge_bonus += (abs(self.ball_vy) / MAX_BALL_SPEED) * 1.5
+        # In Rust: goal_p1 = true when ball_x > FIELD_WIDTH (P1 scores on right, so AI missed ball)
+        missed_ball = outcome.goal_p1
         done = scored_goal or missed_ball
 
         # 5. Compute shaped reward

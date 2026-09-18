@@ -72,6 +72,17 @@ def get_rust_lib():
             ]
             lib.pong_c_resolve_paddle.restype = ctypes.c_float
 
+            if hasattr(lib, "pong_discretize"):
+                lib.pong_discretize.argtypes = [
+                    ctypes.c_float,
+                    ctypes.c_float,
+                    ctypes.c_float,
+                    ctypes.c_float,
+                    ctypes.c_float,
+                    ctypes.c_float,
+                ]
+                lib.pong_discretize.restype = ctypes.c_uint32
+
             _RUST_LIB = lib
             print(f"[RustEngine] Successfully loaded native physics core from {lib_path}")
         except Exception as e:
@@ -109,3 +120,25 @@ def rust_step(
     )
     outcome = lib.pong_c_step(ctypes.byref(state), ctypes.c_uint32(sub_steps))
     return state, outcome
+
+
+def rust_discretize(
+    ball_x: float,
+    ball_y: float,
+    ball_vx: float,
+    ball_vy: float,
+    paddle_x: float,
+    paddle_y: float
+) -> Optional[int]:
+    lib = get_rust_lib()
+    if lib and hasattr(lib, "pong_discretize"):
+        return int(lib.pong_discretize(
+            ctypes.c_float(ball_x),
+            ctypes.c_float(ball_y),
+            ctypes.c_float(ball_vx),
+            ctypes.c_float(ball_vy),
+            ctypes.c_float(paddle_x),
+            ctypes.c_float(paddle_y),
+        ))
+    return None
+

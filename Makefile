@@ -1,6 +1,6 @@
 # Makefile for Pong RL Studio
 
-.PHONY: help up down build shell train train-dqn train-failures clean build-rust build-wasm build-all
+.PHONY: help up down stop restart build shell train train-dqn train-failures clean build-rust build-wasm build-all
 
 help:
 	@echo "Pong RL Studio - Available commands:"
@@ -28,7 +28,12 @@ up:
 	docker compose run --rm --service-ports pong bash /workspace/start.sh
 
 down:
-	docker compose down
+	docker compose down --remove-orphans
+	@docker ps -q --filter "name=pong" | xargs -r docker stop
+
+stop: down
+
+restart: stop up
 
 build:
 	docker compose build
@@ -43,7 +48,13 @@ train-dqn:
 	docker compose run --rm pong python3 /workspace/backend/train.py --algo dqn $(ARGS)
 
 eval-dqn:
-	docker compose run --rm pong python3 /workspace/backend/train.py --algo dqn --eval --episodes 200 --opponent heuristic --pretrained models/dqn_pong.pth $(ARGS)
+	docker compose run --rm pong python3 /workspace/backend/train.py --algo dqn --eval --episodes 200 --opponent heuristic --pretrained models/dqn_pong.onnx $(ARGS)
+
+eval-heuristic:
+	docker compose run --rm pong python3 /workspace/backend/train.py --algo heuristic --eval --episodes 200 --opponent heuristic $(ARGS)
+
+eval-tabular:
+	docker compose run --rm pong python3 /workspace/backend/train.py --algo q_learning --eval --episodes 200 --opponent heuristic --pretrained models/q_table.npy $(ARGS)
 
 train-failures:
 	docker compose run --rm pong python3 /workspace/backend/train.py --algo dqn --train_failures data/failed_shots.json $(ARGS)

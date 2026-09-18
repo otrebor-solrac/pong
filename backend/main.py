@@ -5,7 +5,8 @@ FastAPI server for inference of Pong agent.
 import os
 import json
 import time
-from fastapi import FastAPI, HTTPException
+import numpy as np
+from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
@@ -124,12 +125,47 @@ def get_status():
     }
 
 
+@app.get("/api/q_table")
+def get_q_table():
+    """
+    Serve the Tabular Q-matrix weights in raw binary float32 buffer (69,120 bytes)
+    for zero-latency, client-side browser evaluation at 60 FPS.
+    """
+    agent.check_auto_reload()
+    if agent.q_table is None:
+        agent.load_q_table("models/q_table.npy")
+    if agent.q_table is None:
+        raise HTTPException(status_code=404, detail="Q-table model not found on disk.")
+
+    q_bytes = agent.q_table.astype(np.float32).tobytes()
+    print(f"[QTableDistribution] Serving {len(q_bytes)} bytes ({agent.discretizer.total_states} states x {agent.n_actions} actions) to client.")
+    return Response(
+        content=q_bytes,
+        media_type="application/octet-stream",
+        headers={
+            "X-Total-States": str(agent.discretizer.total_states),
+            "X-Actions": str(agent.n_actions),
+            "Cache-Control": "no-cache"
+        }
+    )
+
+
+_INFERENCE_STATS = {
+    "count": 0,
+    "last_log_time": 0.0,
+    "total_lat_ms": 0.0,
+    "min_lat_ms": 9999.0,
+    "max_lat_ms": 0.0
+}
+
+
 @app.post("/api/predict")
 def predict_action(payload: PongStateInput):
     """
-    Receives the current state of the Pong game and returns the recommended action (0: STAY, 1: UP, 2: DOWN).
-    Supports specifying the mode ('dqn' or 'q_learning') directly in the payload.
+    Receives current state of the Pong game, executes policy inference,
+    and returns recommended action (0: STAY, 1: UP, 2: DOWN) with latency telemetry.
     """
+    t0 = time.perf_counter()
     try:
         agent.check_auto_reload()
         # Allow specifying the mode per request without depending on a global variable
@@ -150,9 +186,31 @@ def predict_action(payload: PongStateInput):
         finally:
             agent.mode = prev_mode
 
+        elapsed_ms = (time.perf_counter() - t0) * 1000.0
+
+        # Update telemetry statistics
+        _INFERENCE_STATS["count"] += 1
+        _INFERENCE_STATS["total_lat_ms"] += elapsed_ms
+        _INFERENCE_STATS["min_lat_ms"] = min(_INFERENCE_STATS["min_lat_ms"], elapsed_ms)
+        _INFERENCE_STATS["max_lat_ms"] = max(_INFERENCE_STATS["max_lat_ms"], elapsed_ms)
+
+        now = time.time()
+        # Log structured metric line periodically to stdout (visible in docker logs)
+        if now - _INFERENCE_STATS["last_log_time"] >= 1.0 or _INFERENCE_STATS["count"] % 25 == 0:
+            avg_lat = _INFERENCE_STATS["total_lat_ms"] / max(1, _INFERENCE_STATS["count"])
+            action_name = ACTION_NAMES.get(action, "UNKNOWN")
+            print(
+                f"[InferenceEngine] Mode: {target_mode.upper():<10} | "
+                f"Latency: {elapsed_ms:5.2f} ms (Avg: {avg_lat:5.2f} ms, Min: {_INFERENCE_STATS['min_lat_ms']:5.2f}, Max: {_INFERENCE_STATS['max_lat_ms']:5.2f}) | "
+                f"Action: {action_name:<5} | "
+                f"Ball: ({payload.ball_x:5.1f}, {payload.ball_y:5.1f})"
+            )
+            _INFERENCE_STATS["last_log_time"] = now
+
         return {
             "action": action,
             "action_name": ACTION_NAMES.get(action, "UNKNOWN"),
+            "latency_ms": round(elapsed_ms, 3),
             "debug_info": debug_info
         }
     except Exception as e:

@@ -22,7 +22,7 @@ An interactive reinforcement learning environment and research suite for Pong. T
 
 | Agent | State representation | Average hits | Max rally | Inference latency |
 | :--- | :--- | :---: | :---: | :---: |
-| Tabular Q-learning | Discrete (1,920 states) | 12.26 | 15 | less than 0.05 ms |
+| Tabular Q-learning | Discrete (5,760 states) | 12.26 | 15 | less than 0.05 ms |
 | Deep Q-network (ONNX) | Continuous normalized vector | 9.97 | 12 | approx 0.8 ms |
 | Reactive heuristic | Rule-based center tracking | 4.80 | 7 | less than 0.01 ms |
 
@@ -90,19 +90,74 @@ make build-rust
 make build-wasm
 ```
 
-## Model training
+## Model training and fine-tuning
 
-### Training tabular Q-learning
+### Training from scratch
 
-```bash
-make train ARGS="--episodes 15000 --pretrained models/q_table.npy"
-```
-
-### Training deep Q-networks
+To train models from an uninitialized state:
 
 ```bash
-make train-dqn ARGS="--episodes 25000 --export_onnx models/dqn_pong.onnx"
+# Train tabular Q-learning against practice wall
+make train ARGS="--episodes 30000 --opponent fronton"
+
+# Train deep Q-network against practice wall
+make train-dqn ARGS="--episodes 1200 --opponent fronton"
 ```
+
+### Warm-restart fine-tuning
+
+Fine-tuning refines an already trained model against the responsive heuristic bot rather than starting with uniform exploration:
+
+#### Tabular Q-learning fine-tuning
+
+Refine the discrete 5,760-state policy matrix using existing knowledge, targeted exploration, and lower learning rates:
+
+```bash
+make train ARGS="--pretrained models/q_table.npy --opponent heuristic --episodes 15000 --epsilon_start 0.15 --alpha 0.08"
+```
+
+Key arguments:
+- `--pretrained models/q_table.npy`: Loads the existing Q-table checkpoint instead of initializing with zeros.
+- `--opponent heuristic`: Trains against an intelligent, tracking opponent with dynamic shot angles and ball speed progression.
+- `--epsilon_start 0.15`: Lowers initial exploration from 100 percent to 15 percent, preserving established defensive behavior while exploring refinements.
+- `--alpha 0.08`: Uses a damped learning rate to prevent destructive policy oscillation.
+
+#### Deep Q-network fine-tuning
+
+Refine the continuous neural policy with PyTorch and automatically re-export the optimized ONNX model:
+
+```bash
+make train-dqn ARGS="--pretrained models/dqn_pong.pth --opponent heuristic --episodes 500 --epsilon_start 0.15 --lr 0.00015"
+```
+
+Key arguments:
+- `--pretrained models/dqn_pong.pth`: Loads trained PyTorch weights for transfer learning.
+- `--lr 0.00015`: Uses a conservative Adam learning rate to avoid destabilizing previously converged feature representations.
+- `--episodes 500`: Performs targeted adaptation runs before saving both PyTorch (`.pth`) and ONNX (`.onnx`) checkpoints.
+
+### Failure-targeted fine-tuning
+
+When playing in the web interface with failure recording enabled, missed shots are automatically recorded to `data/failed_shots.json`. You can run a dedicated clinic fine-tuning run targeting only those specific trajectories:
+
+```bash
+make train-failures
+```
+
+### Evaluating trained models
+
+Evaluate pure greedy performance ($\epsilon = 0$) over 200 benchmark episodes:
+
+```bash
+# Evaluate tabular Q-learning
+make eval-tabular
+
+# Evaluate deep Q-network
+make eval-dqn
+```
+
+### Hot-reloading weights in the live web session
+
+After fine-tuning, you can update the running browser match without restarting Docker containers by clicking the **Reload weights** button in the settings sidebar or issuing a `POST` request to `/api/reload_models`. Tabular Q-learning immediately synchronizes the new 69 KB matrix into WebAssembly memory at 0 ms latency.
 
 ## Repository structure
 

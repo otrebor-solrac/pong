@@ -122,9 +122,13 @@ export default function App() {
           <span className={`status-dot ${serverStatus.online ? 'online' : 'offline'}`} />
           <span className="status-text">
             {serverStatus.online
-              ? (serverStatus.modelLoaded
-                  ? (serverStatus.mode === 'dqn' ? 'FastAPI Connected | DQN Active' : 'FastAPI Connected | Q-Table Active')
-                  : 'FastAPI Connected')
+              ? (aiMode === 'q_learning' && (telemetry.inferenceLatency === 0 || telemetry.inferenceLatency === undefined)
+                  ? 'Rust WASM Active (0 ms)'
+                  : (aiMode === 'dqn'
+                      ? `FastAPI DQN (${telemetry.inferenceLatency || 0} ms)`
+                      : (aiMode === 'q_learning'
+                          ? `FastAPI Q-Table (${telemetry.inferenceLatency || 0} ms)`
+                          : `Baseline (${aiMode})`)))
               : 'Disconnected'}
           </span>
         </div>
