@@ -1,0 +1,19 @@
+[package]
+name = "pong_physics"
+version = "0.1.0"
+edition = "2021"
+description = "High-performance unified physics engine for Pong RL Studio (WASM & Python)"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wasm-bindgen = { version = "0.2", optional = true }
+serde = { version = "1.0", features = ["derive"], optional = true }
+serde-wasm-bindgen = { version = "0.6", optional = true }
+rand = { version = "0.8", default-features = false, features = ["small_rng"] }
+getrandom = { version = "0.2", features = ["js"] }
+
+[features]
+default = []
+wasm = ["wasm-bindgen", "serde", "serde-wasm-bindgen"]

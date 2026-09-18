@@ -1,0 +1,380 @@
+[
+  {
+    "id": 1,
+    "timestamp": 1789726031.1713262,
+    "agent_mode": "dqn",
+    "agent_side": "p1",
+    "rally_hits": 18,
+    "peak_speed": 8.43,
+    "shot_origin": {
+      "ball_x": 755.188720703125,
+      "ball_y": 460.0470886230469,
+      "ball_vx": -8.433759689331055,
+      "ball_vy": -0.046958066523075104,
+      "paddle_x": 770,
+      "paddle_y": 457,
+      "side": "p2"
+    },
+    "miss_impact": {
+      "ball_x": -1.0400910377502441,
+      "ball_y": 455.83575439453125,
+      "ball_vx": -8.433759689331055,
+      "ball_vy": -0.046958066523075104,
+      "paddle_x": 30,
+      "paddle_y": 380,
+      "dy": 75.83575439453125
+    },
+    "trajectory": null
+  },
+  {
+    "id": 2,
+    "timestamp": 1789726048.4943066,
+    "agent_mode": "dqn",
+    "agent_side": "p1",
+    "rally_hits": 20,
+    "peak_speed": 9.79,
+    "shot_origin": {
+      "ball_x": 754.9737548828125,
+      "ball_y": 272.75177001953125,
+      "ball_vx": -9.078779220581055,
+      "ball_vy": 3.6640686988830566,
+      "paddle_x": 770,
+      "paddle_y": 263,
+      "side": "p2"
+    },
+    "miss_impact": {
+      "ball_x": -1.348134994506836,
+      "ball_y": 414.18359375,
+      "ball_vx": -9.068164825439453,
+      "ball_vy": -3.565453052520752,
+      "paddle_x": 30,
+      "paddle_y": 356.5,
+      "dy": 57.68359375
+    },
+    "trajectory": null
+  },
+  {
+    "id": 3,
+    "timestamp": 1789726060.3770816,
+    "agent_mode": "dqn",
+    "agent_side": "p1",
+    "rally_hits": 12,
+    "peak_speed": 6.69,
+    "shot_origin": {
+      "ball_x": 758,
+      "ball_y": 108.66020202636719,
+      "ball_vx": -6.532021999359131,
+      "ball_vy": 1.442550778388977,
+      "paddle_x": 770,
+      "paddle_y": 99.5,
+      "side": "p2"
+    },
+    "miss_impact": {
+      "ball_x": -2.9797909259796143,
+      "ball_y": 276.71893310546875,
+      "ball_vx": -6.532021999359131,
+      "ball_vy": 1.442550778388977,
+      "paddle_x": 30,
+      "paddle_y": 158.5,
+      "dy": 118.21893310546875
+    },
+    "trajectory": null
+  },
+  {
+    "id": 4,
+    "timestamp": 1789726113.3594193,
+    "agent_mode": "dqn",
+    "agent_side": "p1",
+    "rally_hits": 11,
+    "peak_speed": 6.91,
+    "shot_origin": {
+      "ball_x": 754.5458374023438,
+      "ball_y": 68.17069244384766,
+      "ball_vx": -6.90827751159668,
+      "ball_vy": 0.2814595401287079,
+      "paddle_x": 770,
+      "paddle_y": 66.5,
+      "side": "p2"
+    },
+    "miss_impact": {
+      "ball_x": -1.911508560180664,
+      "ball_y": 98.99095916748047,
+      "ball_vx": -6.90827751159668,
+      "ball_vy": 0.2814595401287079,
+      "paddle_x": 30,
+      "paddle_y": 54,
+      "dy": 44.99095916748047
+    },
+    "trajectory": null
+  },
+  {
+    "id": 5,
+    "timestamp": 1789726129.160584,
+    "agent_mode": "dqn",
+    "agent_side": "p1",
+    "rally_hits": 18,
+    "peak_speed": 9.32,
+    "shot_origin": {
+      "ball_x": 755.0374755859375,
+      "ball_y": 406.56939697265625,
+      "ball_vx": -8.887519836425781,
+      "ball_vy": 2.8198816776275635,
+      "paddle_x": 770,
+      "paddle_y": 396.5,
+      "side": "p2"
+    },
+    "miss_impact": {
+      "ball_x": -1.6487417221069336,
+      "ball_y": 338.121826171875,
+      "ball_vx": -8.80085277557373,
+      "ball_vy": -2.9051573276519775,
+      "paddle_x": 30,
+      "paddle_y": 264.5,
+      "dy": 73.621826171875
+    },
+    "trajectory": null
+  },
+  {
+    "id": 6,
+    "timestamp": 1789726144.9983015,
+    "agent_mode": "dqn",
+    "agent_side": "p1",
+    "rally_hits": 18,
+    "peak_speed": 10.01,
+    "shot_origin": {
+      "ball_x": 754.695068359375,
+      "ball_y": 203.98655700683594,
+      "ball_vx": -9.914735794067383,
+      "ball_vy": -1.407470464706421,
+      "paddle_x": 770,
+      "paddle_y": 213.5,
+      "side": "p2"
+    },
+    "miss_impact": {
+      "ball_x": -2.130495071411133,
+      "ball_y": 96.54898071289062,
+      "ball_vx": -9.914735794067383,
+      "ball_vy": -1.407470464706421,
+      "paddle_x": 30,
+      "paddle_y": 43,
+      "dy": 53.548980712890625
+    },
+    "trajectory": null
+  },
+  {
+    "id": 7,
+    "timestamp": 1789726161.3525171,
+    "agent_mode": "dqn",
+    "agent_side": "p1",
+    "rally_hits": 20,
+    "peak_speed": 10.03,
+    "shot_origin": {
+      "ball_x": 755.150390625,
+      "ball_y": 221.5094757080078,
+      "ball_vx": -8.548891067504883,
+      "ball_vy": -5.250796318054199,
+      "paddle_x": 770,
+      "paddle_y": 242.5,
+      "side": "p2"
+    },
+    "miss_impact": {
+      "ball_x": -2.650927782058716,
+      "ball_y": 258.3829650878906,
+      "ball_vx": -8.254061698913574,
+      "ball_vy": 5.171079635620117,
+      "paddle_x": 30,
+      "paddle_y": 202.5,
+      "dy": 55.882965087890625
+    },
+    "trajectory": null
+  },
+  {
+    "id": 8,
+    "timestamp": 1789726177.0186536,
+    "agent_mode": "dqn",
+    "agent_side": "p1",
+    "rally_hits": 18,
+    "peak_speed": 10.04,
+    "shot_origin": {
+      "ball_x": 754.6882934570312,
+      "ball_y": 228.0115509033203,
+      "ball_vx": -9.93517017364502,
+      "ball_vy": 1.470109462738037,
+      "paddle_x": 770,
+      "paddle_y": 219,
+      "side": "p2"
+    },
+    "miss_impact": {
+      "ball_x": -0.3843569755554199,
+      "ball_y": 339.74237060546875,
+      "ball_vx": -9.93517017364502,
+      "ball_vy": 1.470109462738037,
+      "paddle_x": 30,
+      "paddle_y": 263,
+      "dy": 76.74237060546875
+    },
+    "trajectory": null
+  },
+  {
+    "id": 9,
+    "timestamp": 1789726195.1787415,
+    "agent_mode": "dqn",
+    "agent_side": "p1",
+    "rally_hits": 22,
+    "peak_speed": 11.19,
+    "shot_origin": {
+      "ball_x": 758,
+      "ball_y": 93.14739990234375,
+      "ball_vx": -11.02672290802002,
+      "ball_vy": 1.8948904275894165,
+      "paddle_x": 770,
+      "paddle_y": 81.5,
+      "side": "p2"
+    },
+    "miss_impact": {
+      "ball_x": -2.8447818756103516,
+      "ball_y": 223.8959503173828,
+      "ball_vx": -11.02672290802002,
+      "ball_vy": 1.8948904275894165,
+      "paddle_x": 30,
+      "paddle_y": 125.5,
+      "dy": 98.39595031738281
+    },
+    "trajectory": null
+  },
+  {
+    "id": 10,
+    "timestamp": 1789726212.9641914,
+    "agent_mode": "dqn",
+    "agent_side": "p1",
+    "rally_hits": 22,
+    "peak_speed": 10.9,
+    "shot_origin": {
+      "ball_x": 758,
+      "ball_y": 167.1669921875,
+      "ball_vx": -10.73337459564209,
+      "ball_vy": 1.883047103881836,
+      "paddle_x": 770,
+      "paddle_y": 160,
+      "side": "p2"
+    },
+    "miss_impact": {
+      "ball_x": -0.49346303939819336,
+      "ball_y": 300.236328125,
+      "ball_vx": -10.73337459564209,
+      "ball_vy": 1.883047103881836,
+      "paddle_x": 30,
+      "paddle_y": 202.5,
+      "dy": 97.736328125
+    },
+    "trajectory": null
+  },
+  {
+    "id": 11,
+    "timestamp": 1789726247.2872567,
+    "agent_mode": "dqn",
+    "agent_side": "p1",
+    "rally_hits": 21,
+    "peak_speed": 10.04,
+    "shot_origin": {
+      "ball_x": 758,
+      "ball_y": 55.853271484375,
+      "ball_vx": -9.525075912475586,
+      "ball_vy": -3.1638283729553223,
+      "paddle_x": 770,
+      "paddle_y": 66.5,
+      "side": "p2"
+    },
+    "miss_impact": {
+      "ball_x": -1.897359848022461,
+      "ball_y": 193.54525756835938,
+      "ball_vx": -9.345159530639648,
+      "ball_vy": 2.915653705596924,
+      "paddle_x": 30,
+      "paddle_y": 125.5,
+      "dy": 68.04525756835938
+    },
+    "trajectory": null
+  },
+  {
+    "id": 12,
+    "timestamp": 1789726261.5784192,
+    "agent_mode": "dqn",
+    "agent_side": "p1",
+    "rally_hits": 18,
+    "peak_speed": 10.6,
+    "shot_origin": {
+      "ball_x": 753.66357421875,
+      "ball_y": 44.611785888671875,
+      "ball_vx": -6.504580020904541,
+      "ball_vy": -8.375347137451172,
+      "paddle_x": 770,
+      "paddle_y": 98,
+      "side": "p2"
+    },
+    "miss_impact": {
+      "ball_x": -0.7838795185089111,
+      "ball_y": 18.96389389038086,
+      "ball_vx": -5.583107948303223,
+      "ball_vy": 8.378335952758789,
+      "paddle_x": 30,
+      "paddle_y": 175,
+      "dy": -156.03610610961914
+    },
+    "trajectory": null
+  },
+  {
+    "id": 13,
+    "timestamp": 1789726271.0238507,
+    "agent_mode": "dqn",
+    "agent_side": "p1",
+    "rally_hits": 8,
+    "peak_speed": 5.9,
+    "shot_origin": {
+      "ball_x": 755.3279418945312,
+      "ball_y": 141.63832092285156,
+      "ball_vx": -5.34406042098999,
+      "ball_vy": -2.505004644393921,
+      "paddle_x": 770,
+      "paddle_y": 149,
+      "side": "p2"
+    },
+    "miss_impact": {
+      "ball_x": -1.1595678329467773,
+      "ball_y": 223.4475860595703,
+      "ball_vx": -5.19731330871582,
+      "ball_vy": 2.45446515083313,
+      "paddle_x": 30,
+      "paddle_y": 263,
+      "dy": -39.55241394042969
+    },
+    "trajectory": null
+  },
+  {
+    "id": 14,
+    "timestamp": 1789726288.404039,
+    "agent_mode": "dqn",
+    "agent_side": "p1",
+    "rally_hits": 22,
+    "peak_speed": 10.3,
+    "shot_origin": {
+      "ball_x": 754.8215942382812,
+      "ball_y": 145.54974365234375,
+      "ball_vx": -9.53515625,
+      "ball_vy": 3.888601064682007,
+      "paddle_x": 770,
+      "paddle_y": 131,
+      "side": "p2"
+    },
+    "miss_impact": {
+      "ball_x": -1.6350359916687012,
+      "ball_y": 454.04620361328125,
+      "ball_vx": -9.53515625,
+      "ball_vy": 3.888601064682007,
+      "paddle_x": 30,
+      "paddle_y": 378.5,
+      "dy": 75.54620361328125
+    },
+    "trajectory": null
+  }
+]
