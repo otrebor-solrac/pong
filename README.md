@@ -54,7 +54,7 @@ $$\mathcal{L}(\theta) = \mathbb{E} \left[ \text{Smooth}_{L1} \left( R_t^{(n)} + 
 At high ball velocities (exceeding 15 pixels per frame), discrete frame updates can cause the ball to pass through paddle colliders. The unified Rust engine eliminates this artifact through continuous collision math:
 
 1. Dynamic trajectory subdivision:
-   $$\text{sub\_steps} = \max\left(1, \; \left\lceil \frac{\sqrt{\Delta x^2 + \Delta y^2}}{4.0} \right\rceil\right)$$
+   $$\text{substeps} = \max\left(1, \; \left\lceil \frac{\sqrt{\Delta x^2 + \Delta y^2}}{4.0} \right\rceil\right)$$
 2. Swept bounding box intersection testing at each sub-step.
 3. Transverse friction transfer based on paddle linear velocity.
 4. Bounded stochastic deflection jitter to prevent deterministic infinite loops.
