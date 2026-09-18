@@ -1,0 +1,29 @@
+# Node & Frontend
+node_modules/
+frontend/node_modules/
+frontend/dist/
+.vite/
+frontend/.vite/
+
+# Python & Entornos
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.venv/
+venv/
+env/
+
+# Logs y Temporales
+logs/
+*.log
+.DS_Store
+
+# Checkpoints intermediarios (conservar modelos principales)
+models/checkpoints/
+*.tmp
+
+# Rust
+target/
+rust/**/target/
+*.so

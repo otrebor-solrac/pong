@@ -1,0 +1,26 @@
+services:
+  pong:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: pong_rl_studio
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [ gpu ]
+    volumes:
+      - .:/workspace
+    ports:
+      - "8000:8000"   # FastAPI Backend
+      - "5173:5173"   # React Frontend
+    working_dir: /workspace
+    stdin_open: true
+    tty: true
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      - PYTHONPATH=/workspace/backend
+    command: bash /workspace/start.sh
