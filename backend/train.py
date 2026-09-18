@@ -77,6 +77,8 @@ class TabularConfig:
     pretrained_path: Optional[str] = None
     save_path: str = "models/q_table.npy"
     boost_errors: bool = True   # Boost learning on failure episodes via TD error scaling & backward rollback
+    best_score_baseline: float = 0.0
+    skip_baseline_eval: bool = False
 
 
 @dataclass
@@ -120,6 +122,7 @@ class TabularTrainer:
         self.Q = np.zeros((self.discretizer.total_states, NUM_ACTIONS), dtype=np.float32)
         self.best_Q = self.Q.copy()
         self.best_avg_hits = 0.0
+        self.best_score = self.config.best_score_baseline
 
         if self.config.pretrained_path:
             self._load_pretrained(self.config.pretrained_path)
@@ -155,30 +158,43 @@ class TabularTrainer:
                 self.config.epsilon_start = 0.20
 
             print(f"Warm-Restart Tabular: Matrix loaded from {path} (Shape: {loaded.shape})")
-            print("Evaluating pre-trained baseline performance (500 episodes, pure greedy)...")
-            base_avg, base_med, base_p75, base_max = self.evaluate(n_episodes=500)
-            self.best_avg_hits = base_avg
-            print(
-                f"Pre-trained Baseline Skill | "
-                f"Avg: {base_avg:.2f} | Med: {base_med:.1f} | "
-                f"P75: {base_p75:.1f} | Max: {base_max} hits"
-            )
-            print(f"Baseline record protected: New checkpoints must exceed {self.best_avg_hits:.2f} Avg Hits to overwrite.")
+            if not self.config.skip_baseline_eval:
+                print("Evaluating pre-trained baseline performance (200 episodes, pure greedy)...")
+                base_avg, base_goals, base_score, base_max = self.evaluate(n_episodes=200)
+                self.best_score = base_score
+                self.best_avg_hits = base_avg
+                print(
+                    f"Pre-trained Baseline Skill | "
+                    f"Avg Hits: {base_avg:.2f} | Goals: {base_goals:.2f} ({int(base_goals*100)}%) | "
+                    f"Robust Score: {base_score:.2f} | Max: {base_max} hits"
+                )
+                print(f"Baseline record protected: New checkpoints must exceed {self.best_score:.2f} to overwrite.")
+            else:
+                self.best_score = self.config.best_score_baseline
         
         except Exception as e:
             print(f"Error loading matrix {path}: {e}")
 
-    def evaluate(self, n_episodes: int = 500) -> Tuple[float, float, float, int]:
+    def evaluate(self, n_episodes: int = 200, show_progress: bool = False) -> Tuple[float, float, float, int]:
         """
         Evaluate current Q-table in pure greedy mode (epsilon=0) without updating weights.
-        Returns: (avg_hits, median_hits, p75_hits, max_hits)
+        Returns: (avg_hits, avg_goals, score, max_hits)
         """
         eval_hits = []
-        for _ in range(n_episodes):
+        eval_goals = []
+
+        # Standardize evaluation difficulty to maximum (100% speed) to ensure fair comparisons
+        prev_ratio = self.env.opp_speed_ratio
+        if self.config.opponent == "heuristic":
+            self.env.set_opponent_speed_ratio(1.0)
+
+        ep_iter = tqdm(range(n_episodes), desc="Evaluating", unit="ep") if show_progress else range(n_episodes)
+        for _ in ep_iter:
             state, _ = self.env.reset()
             done = False
             steps = 0
             hits = 0
+            goals = 0
 
             while not done and steps < self.config.max_steps:
                 steps += 1
@@ -186,15 +202,29 @@ class TabularTrainer:
                 next_state, _, done, info = self.env.step(action)
                 if info.get("hit_ai_paddle"):
                     hits += 1
+                if info.get("scored_goal"):
+                    goals += 1
                 state = next_state
 
             eval_hits.append(hits)
+            eval_goals.append(goals)
 
-        avg = float(np.mean(eval_hits)) if eval_hits else 0.0
-        med = float(np.median(eval_hits)) if eval_hits else 0.0
-        p75 = float(np.percentile(eval_hits, 75)) if eval_hits else 0.0
+        # Restore training difficulty
+        if self.config.opponent == "heuristic":
+            self.env.set_opponent_speed_ratio(prev_ratio)
+
+        avg_hits = float(np.mean(eval_hits)) if eval_hits else 0.0
+        p25_hits = float(np.percentile(eval_hits, 25)) if eval_hits else 0.0
+        p50_hits = float(np.median(eval_hits)) if eval_hits else 0.0
+        p75_hits = float(np.percentile(eval_hits, 75)) if eval_hits else 0.0
+        iqr_hits = p75_hits - p25_hits
+        avg_goals = float(np.mean(eval_goals)) if eval_goals else 0.0
         max_h = int(max(eval_hits)) if eval_hits else 0
-        return avg, med, p75, max_h
+
+        # Distribution-based robust quality score:
+        hit_score = (avg_hits + p50_hits + p25_hits) / 3.0 - (iqr_hits / 4.0)
+        score = (hit_score + avg_goals * 5.0) if self.config.opponent == "heuristic" else hit_score
+        return avg_hits, avg_goals, score, max_h
 
     def train(self) -> np.ndarray:
         cfg = self.config
@@ -215,16 +245,24 @@ class TabularTrainer:
         epsilon = cfg.epsilon_start
         # Track rally hits distribution per episode batch
         batch_hits = []
+        batch_goals = []
         # Max rally is the maximum number of hits in a single episode
         max_rally_in_batch = 0
+        current_opp_ratio = 0.45
 
         # Track total simulation steps across all episodes
         total_steps = 0
-        report_interval = 1000 if cfg.total_episodes <= 10000 else 2000
+        report_interval = 50 if cfg.total_episodes <= 500 else (100 if cfg.total_episodes <= 2000 else (1000 if cfg.total_episodes <= 10000 else 2000))
 
         pbar = tqdm(range(1, cfg.total_episodes + 1), desc=f"Q-Learning ({cfg.opponent})", unit="ep")
         try:
             for episode in pbar:
+                if cfg.opponent == "heuristic":
+                    # Curriculum Learning: Gradually ramp up opponent difficulty up to 100%
+                    progress = (episode - 1) / max(1, cfg.total_episodes - 1)
+                    current_opp_ratio = 0.45 + 0.55 * progress
+                    self.env.set_opponent_speed_ratio(current_opp_ratio)
+
                 # The state is a discrete representation of the continuous state space
                 state, _ = self.env.reset()
                 # done is a boolean that indicates if the episode is over
@@ -233,6 +271,7 @@ class TabularTrainer:
                 steps = 0
                 # episode_hits is the number of times the ball hits the AI paddle in the current episode
                 episode_hits = 0
+                episode_goals = 0
                 # prev_action is the previous action taken by the AI
                 prev_action = 0
                 # Recent trajectory for retrospective error credit assignment (boosting on bad episodes)
@@ -257,6 +296,9 @@ class TabularTrainer:
                     if info.get("hit_ai_paddle"):
                         # increment the number of hits in the current episode
                         episode_hits += 1
+
+                    if info.get("scored_goal"):
+                        episode_goals += 1
 
                     # Anti-jitter penalty: penalize rapid action switching between consecutive steps
                     # to encourage smooth trajectories and prevent erratic paddle oscillations
@@ -296,8 +338,9 @@ class TabularTrainer:
                         discounted_penalty *= 0.85
                         self.Q[past_state, past_action] += (cfg.alpha * 0.5) * (discounted_penalty - self.Q[past_state, past_action])
 
-                # Record episode hits for batch statistics
+                # Record episode hits and goals for batch statistics
                 batch_hits.append(episode_hits)
+                batch_goals.append(episode_goals)
 
                 # if the number of hits in the current episode is greater than the maximum number of hits in the batch
                 if episode_hits > max_rally_in_batch:
@@ -312,43 +355,57 @@ class TabularTrainer:
                         "Steps": total_steps,
                         "Eps": f"{epsilon:.3f}",
                         "Max": max_rally_in_batch,
-                        "Record": f"{self.best_avg_hits:.2f}"
+                        "Record": f"{self.best_score:.2f}"
                     })
 
-                # Print statistics periodically
+                # Print statistics periodically and evaluate against 100% boss
                 if episode % report_interval == 0:
                     avg_hits = float(np.mean(batch_hits)) if batch_hits else 0.0
-                    median_hits = float(np.median(batch_hits)) if batch_hits else 0.0
+                    p25_hits = float(np.percentile(batch_hits, 25)) if batch_hits else 0.0
+                    p50_hits = float(np.median(batch_hits)) if batch_hits else 0.0
                     p75_hits = float(np.percentile(batch_hits, 75)) if batch_hits else 0.0
+                    iqr_hits = p75_hits - p25_hits
+                    avg_goals = float(np.mean(batch_goals)) if batch_goals else 0.0
 
-                    is_new_best = avg_hits > self.best_avg_hits
-                    if is_new_best:
-                        self.best_avg_hits = avg_hits
+                    # Fast pure greedy evaluation (40 episodes) against 100% boss
+                    eval_hits, eval_goals, eval_score, eval_max = self.evaluate(n_episodes=40)
+                    is_new_best = False
+                    if eval_score > self.best_score:
+                        pbar.write(f" -> Record achieved! ({eval_score:.2f} > {self.best_score:.2f}). Saving...")
+                        self.best_score = eval_score
+                        is_new_best = True
                         self.best_Q = self.Q.copy()
                         np.save(resolved_save_path, self.best_Q)
 
-                    best_marker = f" [RECORD: Avg {self.best_avg_hits:.2f} | Med {median_hits:.1f}]" if is_new_best else ""
+                    best_marker = f" [RECORD: {self.best_score:.2f}]" if is_new_best else ""
+                    rival_info = f" | Opponent: {int(current_opp_ratio * 100)}%" if cfg.opponent == "heuristic" else ""
+                    goals_text = f" | Goals: {avg_goals:.2f} ({int(avg_goals*100)}%)" if cfg.opponent == "heuristic" else ""
+
                     pbar.write(
-                        f"Episode [{episode:5d}/{cfg.total_episodes}] | "
-                        f"Avg: {avg_hits:5.2f} | "
-                        f"Med: {median_hits:4.1f} | "
-                        f"P75: {p75_hits:4.1f} | "
-                        f"Max: {max_rally_in_batch:3d} | "
+                        f"Episode [{episode:5d}/{cfg.total_episodes}]{rival_info} | "
+                        f"Train Avg: {avg_hits:5.2f} | P25: {p25_hits:4.1f} | Med: {p50_hits:4.1f} | IQR: {iqr_hits:4.1f}{goals_text} | "
+                        f"Eval Score (eps=0): {eval_score:5.2f} | Max: {max_rally_in_batch:3d} | "
                         f"Eps: {epsilon:.3f}{best_marker}"
                     )
                     batch_hits = []
+                    batch_goals = []
                     max_rally_in_batch = 0
 
         except KeyboardInterrupt:
             print("\nTraining interrupted manually with Ctrl+C.")
 
-        # Restore the best matrix obtained and save
+        # Restore the best matrix obtained and run final evaluation
+        print("\nEvaluating final policy in pure greedy mode (60 episodes, epsilon=0)...")
+        self.Q = self.best_Q.copy()
+        final_hits, final_goals, final_score, final_max = self.evaluate(n_episodes=60)
         np.save(resolved_save_path, self.best_Q)
 
         print("=" * 65)
         print("Tabular training completed successfully!")
         print(f"Best Q-Matrix saved at: {os.path.abspath(resolved_save_path)}")
-        print(f"Historical record achieved: {self.best_avg_hits:.2f} average hits")
+        print(f"Historical record achieved: {self.best_score:.2f} robust score ({final_hits:.2f} avg hits)")
+        if cfg.opponent == "heuristic":
+            print(f"Final Goals per Episode: {final_goals:.2f} ({int(final_goals * 100)}% win rate)")
         print("=" * 65)
         return self.best_Q
 
@@ -445,7 +502,7 @@ class DQNTrainer:
         self.target_net.eval()
         self.best_weights = copy.deepcopy(self.policy_net.state_dict())
 
-    def evaluate(self, n_episodes: int = 200) -> Tuple[float, float, float, int]:
+    def evaluate(self, n_episodes: int = 200, show_progress: bool = False) -> Tuple[float, float, float, int]:
         """
         Evaluate current DQN policy in pure greedy mode without exploration or training.
         Returns: (avg_hits, avg_goals, score, max_hits)
@@ -454,7 +511,13 @@ class DQNTrainer:
         hits_list = []
         goals_list = []
 
-        for _ in range(n_episodes):
+        # Standardize evaluation difficulty to maximum (100% speed) to ensure fair comparisons
+        prev_ratio = self.env.opp_speed_ratio
+        if self.cfg.opponent == "heuristic":
+            self.env.set_opponent_speed_ratio(1.0)
+
+        ep_iter = tqdm(range(n_episodes), desc="Evaluating", unit="ep") if show_progress else range(n_episodes)
+        for _ in ep_iter:
             self.env.reset()
             state = self.env.get_continuous_state()
             done = False
@@ -478,6 +541,10 @@ class DQNTrainer:
 
             hits_list.append(ep_hits)
             goals_list.append(ep_goals)
+
+        # Restore training difficulty
+        if self.cfg.opponent == "heuristic":
+            self.env.set_opponent_speed_ratio(prev_ratio)
 
         self.policy_net.train()
         avg_hits = float(np.mean(hits_list)) if hits_list else 0.0
@@ -590,10 +657,10 @@ class DQNTrainer:
                 if cfg.opponent == "heuristic":
                     # Curriculum Learning: Gradually ramp up opponent difficulty as training progresses.
                     # Starting at 45% speed allows the agent to learn ball intercept basics easily.
-                    # As episodes advance, linear scaling increases speed up to 90%, preventing
+                    # As episodes advance, linear scaling increases speed up to 100%, preventing
                     # early exploration collapse and preparing the policy for high-speed rallies.
                     progress = (episode - 1) / max(1, cfg.total_episodes - 1)
-                    current_opp_ratio = 0.45 + 0.45 * progress
+                    current_opp_ratio = 0.45 + 0.55 * progress
                     self.env.set_opponent_speed_ratio(current_opp_ratio)
 
                 self.env.reset()
@@ -674,24 +741,16 @@ class DQNTrainer:
                     iqr_hits = p75_hits - p25_hits
                     avg_goals = float(np.mean(batch_goals)) if batch_goals else 0.0
 
-                    # Phase 1: Fast pure greedy evaluation (40 episodes)
+                    # Fast pure greedy evaluation (40 episodes)
                     eval_hits, eval_goals, eval_score, eval_max = self.evaluate(n_episodes=40)
                     is_new_best = False
                     
                     if eval_score > self.best_score:
-                        pbar.write(f" -> Potential new record ({eval_score:.2f} > {self.best_score:.2f}). Running 100 confirmation episodes...")
-                        conf_hits, conf_goals, conf_score, conf_max = self.evaluate(n_episodes=100)
-                        eval_score = conf_score  # Use the more rigorous score for logs
-                        eval_max = max(eval_max, conf_max)
-                        
-                        if conf_score > self.best_score:
-                            pbar.write(f" -> Record CONFIRMED! ({conf_score:.2f} > {self.best_score:.2f}). Saving...")
-                            self.best_score = conf_score
-                            is_new_best = True
-                            self.best_weights = copy.deepcopy(self.policy_net.state_dict())
-                            self.save_model_to_disk()
-                        else:
-                            pbar.write(f" -> Record REJECTED. Confirmation score was only {conf_score:.2f}.")
+                        pbar.write(f" -> Record achieved! ({eval_score:.2f} > {self.best_score:.2f}). Saving...")
+                        self.best_score = eval_score
+                        is_new_best = True
+                        self.best_weights = copy.deepcopy(self.policy_net.state_dict())
+                        self.save_model_to_disk()
 
                     best_marker = f" [RECORD: {self.best_score:.2f}]" if is_new_best else ""
                     rival_info = f" | Opponent: {int(current_opp_ratio * 100)}%" if cfg.opponent == "heuristic" else ""
@@ -909,9 +968,9 @@ def main():
     parser.add_argument(
         "--algo",
         type=str,
-        choices=["q_learning", "tabular", "dqn"],
+        choices=["q_learning", "tabular", "dqn", "heuristic"],
         default="q_learning",
-        help="Algorithm to train: 'q_learning' (tabular) or 'dqn' (neural network)"
+        help="Algorithm to train or evaluate: 'q_learning' (tabular), 'dqn' (neural network), or 'heuristic'"
     )
     parser.add_argument(
         "--episodes",
@@ -997,20 +1056,115 @@ def main():
         eval_episodes = args.episodes or 200
         print("=" * 65)
         print(f"Starting Pure Greedy Evaluation ({eval_episodes} episodes, epsilon=0)")
+        print(f"   - Algorithm: {args.algo.upper()}")
         print(f"   - Opponent: {args.opponent.upper()}")
-        print(f"   - Model: {args.pretrained or 'models/dqn_pong.pth'}")
-        print("=" * 65)
-        dqn_cfg = DQNConfig(
-            opponent=args.opponent,
-            pretrained_path=args.pretrained or "models/dqn_pong.pth",
-            skip_baseline_eval=True
-        )
-        trainer = DQNTrainer(dqn_cfg)
-        model_path = os.path.abspath(dqn_cfg.pretrained_path)
-        if not os.path.isfile(model_path):
-            model_path = os.path.join(os.path.dirname(__file__), "..", dqn_cfg.pretrained_path)
-        trainer.policy_net.load_state_dict(torch.load(model_path, map_location=trainer.device))
-        avg_hits, avg_goals, score, max_hits = trainer.evaluate(n_episodes=eval_episodes)
+        if args.algo == "heuristic":
+            print(f"   - Model: Rule-Based Tracking Heuristic (Right Paddle)")
+            print("=" * 65)
+            env = FastPongEnv(opponent=args.opponent, opp_speed_ratio=1.0)
+            hits_list = []
+            goals_list = []
+            ep_iter = tqdm(range(eval_episodes), desc="Evaluating", unit="ep")
+            for _ in ep_iter:
+                env.reset()
+                done = False
+                steps = 0
+                ep_hits = 0
+                ep_goals = 0
+                while not done and steps < 3500:
+                    steps += 1
+                    dy = env.ball_y - env.ai_y
+                    if abs(dy) < 15:
+                        action = 0
+                    elif dy < 0:
+                        action = 1
+                    else:
+                        action = 2
+                    _, _, done, info = env.step(action)
+                    if info.get("hit_ai_paddle"):
+                        ep_hits += 1
+                    if info.get("scored_goal"):
+                        ep_goals += 1
+                hits_list.append(ep_hits)
+                goals_list.append(ep_goals)
+
+            avg_hits = float(np.mean(hits_list)) if hits_list else 0.0
+            p25_hits = float(np.percentile(hits_list, 25)) if hits_list else 0.0
+            p50_hits = float(np.median(hits_list)) if hits_list else 0.0
+            p75_hits = float(np.percentile(hits_list, 75)) if hits_list else 0.0
+            iqr_hits = p75_hits - p25_hits
+            avg_goals = float(np.mean(goals_list)) if goals_list else 0.0
+            max_hits = int(max(hits_list)) if hits_list else 0
+
+            hit_score = (avg_hits + p50_hits + p25_hits) / 3.0 - (iqr_hits / 4.0)
+            score = (hit_score + avg_goals * 5.0) if args.opponent == "heuristic" else hit_score
+        elif args.algo == "q_learning":
+            model_file = args.pretrained or "models/q_table.npy"
+            print(f"   - Model: {model_file}")
+            print("=" * 65)
+            tab_cfg = TabularConfig(
+                opponent=args.opponent,
+                pretrained_path=model_file,
+                skip_baseline_eval=True
+            )
+            trainer = TabularTrainer(tab_cfg)
+            avg_hits, avg_goals, score, max_hits = trainer.evaluate(n_episodes=eval_episodes, show_progress=True)
+        else:
+            model_file = args.pretrained or "models/dqn_pong.onnx"
+            print(f"   - Model: {model_file}")
+            print("=" * 65)
+            model_path = os.path.abspath(model_file)
+            if not os.path.isfile(model_path):
+                model_path = os.path.join(os.path.dirname(__file__), "..", model_file)
+
+            if model_path.endswith(".onnx"):
+                import onnxruntime as ort
+                session = ort.InferenceSession(model_path, providers=['CPUExecutionProvider'])
+                input_name = session.get_inputs()[0].name
+                env = FastPongEnv(opponent=args.opponent, opp_speed_ratio=1.0)
+                hits_list = []
+                goals_list = []
+                ep_iter = tqdm(range(eval_episodes), desc="Evaluating (ONNX Runtime)", unit="ep")
+                st_buf = np.empty((1, 4), dtype=np.float32)
+                for _ in ep_iter:
+                    env.reset()
+                    state = env.get_continuous_state()
+                    done = False
+                    steps = 0
+                    ep_hits = 0
+                    ep_goals = 0
+                    while not done and steps < (args.max_steps or 3500):
+                        steps += 1
+                        st_buf[0] = state
+                        q_vals = session.run(None, {input_name: st_buf})[0]
+                        action = int(np.argmax(q_vals[0]))
+                        _, _, done, info = env.step(action)
+                        if info.get("hit_ai_paddle"):
+                            ep_hits += 1
+                        if info.get("scored_goal"):
+                            ep_goals += 1
+                        state = env.get_continuous_state()
+                    hits_list.append(ep_hits)
+                    goals_list.append(ep_goals)
+
+                avg_hits = float(np.mean(hits_list)) if hits_list else 0.0
+                p25_hits = float(np.percentile(hits_list, 25)) if hits_list else 0.0
+                p50_hits = float(np.median(hits_list)) if hits_list else 0.0
+                p75_hits = float(np.percentile(hits_list, 75)) if hits_list else 0.0
+                iqr_hits = p75_hits - p25_hits
+                avg_goals = float(np.mean(goals_list)) if goals_list else 0.0
+                max_hits = int(max(hits_list)) if hits_list else 0
+                hit_score = (avg_hits + p50_hits + p25_hits) / 3.0 - (iqr_hits / 4.0)
+                score = (hit_score + avg_goals * 5.0) if args.opponent == "heuristic" else hit_score
+            else:
+                dqn_cfg = DQNConfig(
+                    opponent=args.opponent,
+                    pretrained_path=model_path,
+                    skip_baseline_eval=True
+                )
+                trainer = DQNTrainer(dqn_cfg)
+                trainer.policy_net.load_state_dict(torch.load(model_path, map_location=trainer.device))
+                avg_hits, avg_goals, score, max_hits = trainer.evaluate(n_episodes=eval_episodes, show_progress=True)
         print("=" * 65)
         print("Evaluation Finished!")
         print(f"   - Average Hits: {avg_hits:.2f}")

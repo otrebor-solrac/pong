@@ -25,7 +25,27 @@ export default function PongCanvas({
   const canvasRef = useRef(null);
   const wasmEngineRef = useRef(null);
 
-  // Initialize native WebAssembly physics engine
+  const loadQTableIntoWasm = useCallback(async () => {
+    if (!wasmEngineRef.current) return;
+    try {
+      const endpoint = apiUrl ? `${apiUrl}/api/q_table` : '/api/q_table';
+      const res = await fetch(`${endpoint}?t=${Date.now()}`);
+      if (res.ok) {
+        const buffer = await res.arrayBuffer();
+        const bytes = new Uint8Array(buffer);
+        if (typeof wasmEngineRef.current.load_q_table === 'function') {
+          const success = wasmEngineRef.current.load_q_table(bytes);
+          if (success) {
+            console.log('[PongCanvas] Native Rust WASM Q-table loaded successfully (0 ms latency ready).');
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('[PongCanvas] Could not load Q-table into WASM:', err);
+    }
+  }, [apiUrl]);
+
+  // Initialize native WebAssembly physics engine & load Q-matrix
   useEffect(() => {
     let active = true;
     import('../wasm/pong_physics.js')
@@ -35,16 +55,36 @@ export default function PongCanvas({
           if (active && wasm.WasmPongEngine) {
             wasmEngineRef.current = new wasm.WasmPongEngine();
             console.log('[PongCanvas] Native Rust WASM physics engine active.');
+            loadQTableIntoWasm();
           }
         }
       })
-      .catch(() => {
-        // Normal when WASM is not yet built; uses synchronized JS fallback
+      .catch((err) => {
+        console.warn('[PongCanvas] Could not initialize WASM engine:', err);
       });
+
+    const handleReload = () => {
+      loadQTableIntoWasm();
+    };
+    window.addEventListener('pong:reload_models', handleReload);
+
     return () => {
       active = false;
+      window.removeEventListener('pong:reload_models', handleReload);
     };
-  }, []);
+  }, [loadQTableIntoWasm]);
+
+  // Re-fetch Q-table when switching to Q-learning mode if not yet loaded
+  useEffect(() => {
+    if ((aiMode === 'q_learning' || player1Mode === 'q_learning') && wasmEngineRef.current) {
+      const isLoaded = typeof wasmEngineRef.current.is_q_table_loaded === 'function'
+        ? wasmEngineRef.current.is_q_table_loaded()
+        : false;
+      if (!isLoaded) {
+        loadQTableIntoWasm();
+      }
+    }
+  }, [aiMode, player1Mode, loadQTableIntoWasm]);
 
   const gameState = useRef({
     ballX: FIELD_WIDTH / 2,
@@ -152,9 +192,10 @@ export default function PongCanvas({
 
   const fetchAiPrediction = useCallback(async () => {
     const state = gameState.current;
+    const isWasmQReady = wasmEngineRef.current?.is_q_table_loaded?.();
 
-    // Player 2 (Right Paddle) -> RL API (Q-Learning / DQN)
-    if (aiMode === 'q_learning' || aiMode === 'dqn') {
+    // Player 2 (Right Paddle) -> Remote RL API (DQN or fallback if WASM Q-table is not yet ready)
+    if (aiMode === 'dqn' || (aiMode === 'q_learning' && !isWasmQReady)) {
       try {
         const t0 = performance.now();
         const response = await fetch(`${apiUrl}/api/predict`, {
@@ -187,8 +228,8 @@ export default function PongCanvas({
       }
     }
 
-    // Player 1 (Left Paddle) -> RL API (Q-Learning / DQN)
-    if (player1Mode === 'q_learning' || player1Mode === 'dqn') {
+    // Player 1 (Left Paddle) -> Remote RL API (DQN or fallback if WASM Q-table is not yet ready)
+    if (player1Mode === 'dqn' || (player1Mode === 'q_learning' && !isWasmQReady)) {
       try {
         const response = await fetch(`${apiUrl}/api/predict`, {
           method: 'POST',
@@ -224,9 +265,10 @@ export default function PongCanvas({
     let animationFrameId;
 
     const gameLoop = (timestamp) => {
-      const state = gameState.current;
+      try {
+        const state = gameState.current;
 
-      if (gameRunning) {
+        if (gameRunning) {
         const prevPlayerY = state.playerY;
         const prevAiY = state.aiY;
 
@@ -256,8 +298,34 @@ export default function PongCanvas({
           } else if (state.p1RandomAction === 2) {
             state.playerY = Math.min(FIELD_HEIGHT - PADDLE_HEIGHT / 2, state.playerY + AI_PADDLE_SPEED);
           }
-        } else if (player1Mode === 'q_learning' || player1Mode === 'dqn') {
-          // Inferencia directa y pura de RL para Player 1
+        } else if (player1Mode === 'q_learning') {
+          // Zero-latency native Rust WebAssembly Q-learning for Player 1
+          if (
+            wasmEngineRef.current &&
+            typeof wasmEngineRef.current.is_q_table_loaded === 'function' &&
+            wasmEngineRef.current.is_q_table_loaded() &&
+            typeof wasmEngineRef.current.predict_q_action === 'function'
+          ) {
+            try {
+              state.p1TargetAction = wasmEngineRef.current.predict_q_action(
+                state.ballX,
+                state.ballY,
+                state.ballVx,
+                state.ballVy,
+                30,
+                state.playerY
+              );
+            } catch (err) {
+              console.warn('[PongCanvas] WASM predict_q_action p1 error:', err);
+            }
+          }
+          if (state.p1TargetAction === 1) {
+            state.playerY = Math.max(PADDLE_HEIGHT / 2, state.playerY - AI_PADDLE_SPEED);
+          } else if (state.p1TargetAction === 2) {
+            state.playerY = Math.min(FIELD_HEIGHT - PADDLE_HEIGHT / 2, state.playerY + AI_PADDLE_SPEED);
+          }
+        } else if (player1Mode === 'dqn') {
+          // Remote DQN action for Player 1
           if (state.p1TargetAction === 1) {
             state.playerY = Math.max(PADDLE_HEIGHT / 2, state.playerY - AI_PADDLE_SPEED);
           } else if (state.p1TargetAction === 2) {
@@ -284,8 +352,38 @@ export default function PongCanvas({
           } else if (state.p2RandomAction === 2) {
             state.aiY = Math.min(FIELD_HEIGHT - PADDLE_HEIGHT / 2, state.aiY + AI_PADDLE_SPEED);
           }
-        } else if (aiMode === 'q_learning' || aiMode === 'dqn') {
-          // Inferencia directa y pura de RL para Player 2
+        } else if (aiMode === 'q_learning') {
+          // Zero-latency native Rust WebAssembly Q-learning for Player 2 (0.00 ms lag)
+          if (
+            wasmEngineRef.current &&
+            typeof wasmEngineRef.current.is_q_table_loaded === 'function' &&
+            wasmEngineRef.current.is_q_table_loaded() &&
+            typeof wasmEngineRef.current.predict_q_action === 'function'
+          ) {
+            try {
+              state.aiTargetAction = wasmEngineRef.current.predict_q_action(
+                state.ballX,
+                state.ballY,
+                state.ballVx,
+                state.ballVy,
+                FIELD_WIDTH - 30,
+                state.aiY
+              );
+              state.telemetry.lastInferenceLatency = 0;
+              if (state.aiTargetAction === 0) state.telemetry.aiActions.stay += 1;
+              else if (state.aiTargetAction === 1) state.telemetry.aiActions.up += 1;
+              else if (state.aiTargetAction === 2) state.telemetry.aiActions.down += 1;
+            } catch (err) {
+              console.warn('[PongCanvas] WASM predict_q_action p2 error:', err);
+            }
+          }
+          if (state.aiTargetAction === 1) { // UP
+            state.aiY = Math.max(PADDLE_HEIGHT / 2, state.aiY - AI_PADDLE_SPEED);
+          } else if (state.aiTargetAction === 2) { // DOWN
+            state.aiY = Math.min(FIELD_HEIGHT - PADDLE_HEIGHT / 2, state.aiY + AI_PADDLE_SPEED);
+          }
+        } else if (aiMode === 'dqn') {
+          // Remote DQN inference for Player 2
           if (state.aiTargetAction === 1) { // UP
             state.aiY = Math.max(PADDLE_HEIGHT / 2, state.aiY - AI_PADDLE_SPEED);
           } else if (state.aiTargetAction === 2) { // DOWN
@@ -497,15 +595,15 @@ export default function PongCanvas({
           resetBall('player');
         }
 
-        // API Prediction Polling (Every 16ms / per-frame, when Q-learning or DQN is in use)
-        if (timestamp - state.lastPredictTime > 16 && !state.isPredicting) {
-          if (
-            aiMode === 'q_learning' || aiMode === 'dqn' ||
-            player1Mode === 'q_learning' || player1Mode === 'dqn'
-          ) {
-            state.isPredicting = true;
-            fetchAiPrediction().finally(() => { state.isPredicting = false; });
-          }
+        // Remote API Prediction Polling (Every 16ms / per-frame, only when DQN or un-cached Q-learning is in use)
+        const isWasmQReady = wasmEngineRef.current?.is_q_table_loaded?.();
+        const needsRemotePrediction =
+          (aiMode === 'dqn' || (aiMode === 'q_learning' && !isWasmQReady)) ||
+          (player1Mode === 'dqn' || (player1Mode === 'q_learning' && !isWasmQReady));
+
+        if (timestamp - state.lastPredictTime > 16 && !state.isPredicting && needsRemotePrediction) {
+          state.isPredicting = true;
+          fetchAiPrediction().finally(() => { state.isPredicting = false; });
           state.lastPredictTime = timestamp;
         }
 
@@ -549,52 +647,61 @@ export default function PongCanvas({
         }
       }
 
-      // Render
-      ctx.clearRect(0, 0, FIELD_WIDTH, FIELD_HEIGHT);
+      // Safety guard against NaN
+        if (!Number.isFinite(state.ballX)) state.ballX = FIELD_WIDTH / 2;
+        if (!Number.isFinite(state.ballY)) state.ballY = FIELD_HEIGHT / 2;
+        if (!Number.isFinite(state.playerY)) state.playerY = FIELD_HEIGHT / 2;
+        if (!Number.isFinite(state.aiY)) state.aiY = FIELD_HEIGHT / 2;
 
-      ctx.fillStyle = '#020617';
-      ctx.fillRect(0, 0, FIELD_WIDTH, FIELD_HEIGHT);
+        // Render
+        ctx.clearRect(0, 0, FIELD_WIDTH, FIELD_HEIGHT);
 
-      ctx.strokeStyle = '#334155';
-      ctx.lineWidth = 2;
-      ctx.setLineDash([8, 8]);
-      ctx.beginPath();
-      ctx.moveTo(FIELD_WIDTH / 2, 0);
-      ctx.lineTo(FIELD_WIDTH / 2, FIELD_HEIGHT);
-      ctx.stroke();
-      ctx.setLineDash([]);
+        ctx.fillStyle = '#020617';
+        ctx.fillRect(0, 0, FIELD_WIDTH, FIELD_HEIGHT);
 
-      // Player 1 Paddle (Left, Sky Blue)
-      ctx.fillStyle = '#38bdf8';
-      ctx.beginPath();
-      ctx.roundRect(
-        30 - PADDLE_WIDTH / 2,
-        state.playerY - PADDLE_HEIGHT / 2,
-        PADDLE_WIDTH,
-        PADDLE_HEIGHT,
-        3
-      );
-      ctx.fill();
+        ctx.strokeStyle = '#334155';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([8, 8]);
+        ctx.beginPath();
+        ctx.moveTo(FIELD_WIDTH / 2, 0);
+        ctx.lineTo(FIELD_WIDTH / 2, FIELD_HEIGHT);
+        ctx.stroke();
+        ctx.setLineDash([]);
 
-      // Player 2 Paddle (Right, White)
-      ctx.fillStyle = '#f8fafc';
-      ctx.beginPath();
-      ctx.roundRect(
-        FIELD_WIDTH - 30 - PADDLE_WIDTH / 2,
-        state.aiY - PADDLE_HEIGHT / 2,
-        PADDLE_WIDTH,
-        PADDLE_HEIGHT,
-        3
-      );
-      ctx.fill();
+        // Player 1 Paddle (Left, Sky Blue)
+        ctx.fillStyle = '#38bdf8';
+        ctx.beginPath();
+        ctx.roundRect(
+          30 - PADDLE_WIDTH / 2,
+          state.playerY - PADDLE_HEIGHT / 2,
+          PADDLE_WIDTH,
+          PADDLE_HEIGHT,
+          3
+        );
+        ctx.fill();
 
-      // Ball
-      ctx.fillStyle = '#f8fafc';
-      ctx.beginPath();
-      ctx.arc(state.ballX, state.ballY, BALL_SIZE / 2, 0, Math.PI * 2);
-      ctx.fill();
+        // Player 2 Paddle (Right, White)
+        ctx.fillStyle = '#f8fafc';
+        ctx.beginPath();
+        ctx.roundRect(
+          FIELD_WIDTH - 30 - PADDLE_WIDTH / 2,
+          state.aiY - PADDLE_HEIGHT / 2,
+          PADDLE_WIDTH,
+          PADDLE_HEIGHT,
+          3
+        );
+        ctx.fill();
 
-      animationFrameId = requestAnimationFrame(gameLoop);
+        // Ball
+        ctx.fillStyle = '#f8fafc';
+        ctx.beginPath();
+        ctx.arc(state.ballX, state.ballY, BALL_SIZE / 2, 0, Math.PI * 2);
+        ctx.fill();
+      } catch (loopErr) {
+        console.error('[PongCanvas] Game loop tick error:', loopErr);
+      } finally {
+        animationFrameId = requestAnimationFrame(gameLoop);
+      }
     };
 
     animationFrameId = requestAnimationFrame(gameLoop);

@@ -29,6 +29,56 @@ pub const P2_X: f32 = FIELD_WIDTH - PADDLE_OFFSET_X;
 pub const P2_FRONT_X: f32 = P2_X - PADDLE_WIDTH / 2.0;
 pub const P2_BACK_X: f32 = P2_X + PADDLE_WIDTH / 2.0;
 
+pub const MAX_DX: f32 = FIELD_WIDTH - PADDLE_OFFSET_X;
+pub const MAX_DY: f32 = FIELD_HEIGHT - (PADDLE_HEIGHT / 2.0) - (BALL_SIZE / 2.0);
+
+pub const N_BINS_DX: u32 = 20;
+pub const N_BINS_DY: u32 = 24;
+pub const N_BINS_VX: u32 = 2;
+pub const N_BINS_VY: u32 = 2;
+pub const N_BINS_SPEED: u32 = 3;
+pub const TOTAL_STATES: u32 = N_BINS_DX * N_BINS_DY * N_BINS_VX * N_BINS_VY * N_BINS_SPEED; // 5,760
+
+/// Exact ground-truth continuous-to-discrete state conversion
+#[inline]
+pub fn discretize_state(
+    ball_x: f32,
+    ball_y: f32,
+    ball_vx: f32,
+    ball_vy: f32,
+    paddle_x: f32,
+    paddle_y: f32,
+) -> u32 {
+    let dx = (paddle_x - ball_x).abs();
+    let dy = ball_y - paddle_y;
+
+    let dx_clamped = dx.clamp(0.0, MAX_DX);
+    let bin_dx = (((dx_clamped / MAX_DX) * N_BINS_DX as f32) as u32).min(N_BINS_DX - 1);
+
+    let dy_clamped = dy.clamp(-MAX_DY, MAX_DY);
+    let dy_norm = (dy_clamped + MAX_DY) / (2.0 * MAX_DY);
+    let bin_dy = ((dy_norm * N_BINS_DY as f32) as u32).min(N_BINS_DY - 1);
+
+    let is_approaching = (ball_vx > 0.0 && paddle_x > ball_x) || (ball_vx < 0.0 && paddle_x < ball_x);
+    let bin_vx = if is_approaching { 0 } else { 1 };
+    let bin_vy = if ball_vy >= 0.0 { 0 } else { 1 };
+
+    let speed = ball_vx.hypot(ball_vy);
+    let bin_speed = if speed <= 7.0 {
+        0
+    } else if speed <= 11.0 {
+        1
+    } else {
+        2
+    };
+
+    bin_dx * (N_BINS_DY * N_BINS_VX * N_BINS_VY * N_BINS_SPEED)
+        + bin_dy * (N_BINS_VX * N_BINS_VY * N_BINS_SPEED)
+        + bin_vx * (N_BINS_VY * N_BINS_SPEED)
+        + bin_vy * N_BINS_SPEED
+        + bin_speed
+}
+
 /// Core state representation for physics computation
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -139,9 +189,13 @@ impl PongPhysics {
         let half_h = PADDLE_HEIGHT / 2.0;
         let hit_offset = ((ball_y - paddle_y) / half_h).clamp(-1.0, 1.0);
 
-        // Accelerated rally dynamics: 1.02 to 1.08 speed multiplier per paddle hit (mean ~1.05)
+        // Transferencia de energía cinética de la paleta (Momento Escalar / Smash)
+        // Se añade velocidad a la bola proporcional a la rapidez de la paleta.
+        let kinetic_transfer = paddle_vy.abs() * 0.20;
+
+        // Accelerated rally dynamics: speed multiplier per paddle hit + kinetic transfer
         let speed_factor = self.rand_range(1.02, 1.08);
-        let raw_speed = ball_vx.hypot(*ball_vy) * speed_factor;
+        let raw_speed = ball_vx.hypot(*ball_vy) * speed_factor + kinetic_transfer;
         let current_speed = raw_speed.clamp(INITIAL_BALL_SPEED, MAX_BALL_SPEED);
 
         let base_angle = hit_offset * 0.75;
@@ -299,6 +353,18 @@ pub extern "C" fn pong_c_resolve_paddle(
     })
 }
 
+#[no_mangle]
+pub extern "C" fn pong_discretize(
+    ball_x: f32,
+    ball_y: f32,
+    ball_vx: f32,
+    ball_vy: f32,
+    paddle_x: f32,
+    paddle_y: f32,
+) -> u32 {
+    discretize_state(ball_x, ball_y, ball_vx, ball_vy, paddle_x, paddle_y)
+}
+
 // ==============================================================================
 // WebAssembly (WASM) Bindings for Vite/React Frontend
 // ==============================================================================
@@ -310,6 +376,7 @@ pub mod wasm_api {
     #[wasm_bindgen]
     pub struct WasmPongEngine {
         inner: PongPhysics,
+        q_table: Vec<f32>,
     }
 
     #[wasm_bindgen]
@@ -318,6 +385,72 @@ pub mod wasm_api {
         pub fn new() -> Self {
             Self {
                 inner: PongPhysics::new(),
+                q_table: Vec::new(),
+            }
+        }
+
+        /// Load binary float32 Q-table buffer into native WASM memory
+        #[wasm_bindgen]
+        pub fn load_q_table(&mut self, table_bytes: &[u8]) -> bool {
+            if table_bytes.len() % 4 != 0 {
+                return false;
+            }
+            let float_count = table_bytes.len() / 4;
+            let mut floats = Vec::with_capacity(float_count);
+            for chunk in table_bytes.chunks_exact(4) {
+                let bytes: [u8; 4] = chunk.try_into().unwrap();
+                floats.push(f32::from_ne_bytes(bytes));
+            }
+            self.q_table = floats;
+            true
+        }
+
+        /// Returns true if the full Q-table is loaded in WASM memory
+        #[wasm_bindgen]
+        pub fn is_q_table_loaded(&self) -> bool {
+            self.q_table.len() == (TOTAL_STATES * 3) as usize
+        }
+
+        /// Compute discrete state_id directly in Rust WASM
+        #[wasm_bindgen]
+        pub fn discretize(
+            &self,
+            ball_x: f32,
+            ball_y: f32,
+            ball_vx: f32,
+            ball_vy: f32,
+            paddle_x: f32,
+            paddle_y: f32,
+        ) -> u32 {
+            discretize_state(ball_x, ball_y, ball_vx, ball_vy, paddle_x, paddle_y)
+        }
+
+        /// Evaluate Q-Learning policy and return optimal action (0: STAY, 1: UP, 2: DOWN) with 0 ms lag
+        #[wasm_bindgen]
+        pub fn predict_q_action(
+            &self,
+            ball_x: f32,
+            ball_y: f32,
+            ball_vx: f32,
+            ball_vy: f32,
+            paddle_x: f32,
+            paddle_y: f32,
+        ) -> u8 {
+            if self.q_table.len() != (TOTAL_STATES * 3) as usize {
+                return 0; // STAY fallback while loading
+            }
+            let state_id = discretize_state(ball_x, ball_y, ball_vx, ball_vy, paddle_x, paddle_y);
+            let base_idx = (state_id * 3) as usize;
+            let q_stay = self.q_table[base_idx];
+            let q_up = self.q_table[base_idx + 1];
+            let q_down = self.q_table[base_idx + 2];
+
+            if q_up > q_stay && q_up >= q_down {
+                1 // UP
+            } else if q_down > q_stay && q_down > q_up {
+                2 // DOWN
+            } else {
+                0 // STAY
             }
         }
 

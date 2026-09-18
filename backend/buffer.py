@@ -40,15 +40,20 @@ class NStepReplayBuffer:
 
     def push(self, state: np.ndarray, action: int, reward: float, next_state: np.ndarray, done: bool):
         """
-        Append transition and emit to main replay buffer once n steps accumulate or on episode termination (done=True).
+        Append transition and emit to main replay buffer once n steps accumulate.
+        When done=True, drain all remaining accumulated transitions so terminal steps are not lost.
         """
         self.n_step_buffer.append((state, action, reward, next_state, done))
 
-        if len(self.n_step_buffer) == self.n_step or done:
-            n_state, n_action, n_reward, n_next, n_done = self._compute_n_step_return()
-            self.buffer.append((n_state, n_action, n_reward, n_next, n_done))
-            if done:
-                self.n_step_buffer.clear()
+        if not done:
+            if len(self.n_step_buffer) == self.n_step:
+                n_state, n_action, n_reward, n_next, n_done = self._compute_n_step_return()
+                self.buffer.append((n_state, n_action, n_reward, n_next, n_done))
+        else:
+            while len(self.n_step_buffer) > 0:
+                n_state, n_action, n_reward, n_next, n_done = self._compute_n_step_return()
+                self.buffer.append((n_state, n_action, n_reward, n_next, n_done))
+                self.n_step_buffer.popleft()
 
     def sample(self, batch_size: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """

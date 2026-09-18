@@ -122,15 +122,50 @@ class PongQAgent:
         """
         Check if the ONNX or Q-table model files on disk were modified and hot-reload them seamlessly.
         """
-        if hasattr(self, "onnx_path") and self.onnx_path and os.path.isfile(self.onnx_path):
-            try:
-                current_mtime = os.path.getmtime(self.onnx_path)
-                if hasattr(self, "last_onnx_mtime") and current_mtime > self.last_onnx_mtime:
-                    print(f"[PongQAgent] Detected new ONNX weights on disk ({current_mtime} > {self.last_onnx_mtime}). Hot-reloading...")
-                    return self.load_onnx_model(self.onnx_path)
-            except Exception as e:
-                print(f"[PongQAgent] Auto-reload check warning: {e}")
-        return False
+        reloaded = False
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+
+        # 1. Check ONNX file
+        onnx_candidates = [
+            getattr(self, "onnx_path", None),
+            "models/dqn_pong.onnx",
+            os.path.join(base_dir, "..", "models", "dqn_pong.onnx"),
+            "/workspace/models/dqn_pong.onnx"
+        ]
+        for p in onnx_candidates:
+            if p and os.path.isfile(p):
+                try:
+                    mtime = os.path.getmtime(p)
+                    last_mtime = getattr(self, "last_onnx_mtime", 0.0)
+                    if mtime > last_mtime:
+                        print(f"[PongQAgent] Detected updated ONNX weights ({mtime} > {last_mtime}). Hot-reloading...")
+                        if self.load_onnx_model(p):
+                            reloaded = True
+                            break
+                except Exception as e:
+                    print(f"[PongQAgent] Auto-reload ONNX warning: {e}")
+
+        # 2. Check Q-table file
+        q_candidates = [
+            getattr(self, "q_table_path", None),
+            "models/q_table.npy",
+            os.path.join(base_dir, "..", "models", "q_table.npy"),
+            "/workspace/models/q_table.npy"
+        ]
+        for p in q_candidates:
+            if p and os.path.isfile(p):
+                try:
+                    mtime = os.path.getmtime(p)
+                    last_mtime = getattr(self, "last_q_table_mtime", 0.0)
+                    if mtime > last_mtime:
+                        print(f"[PongQAgent] Detected updated Q-Table weights ({mtime} > {last_mtime}). Hot-reloading...")
+                        if self.load_q_table(p):
+                            reloaded = True
+                            break
+                except Exception as e:
+                    print(f"[PongQAgent] Auto-reload Q-table warning: {e}")
+
+        return reloaded
 
     def load_dqn_model(self, filepath: str = "models/dqn_pong.pth") -> bool:
         """
@@ -222,6 +257,8 @@ class PongQAgent:
                 self.q_table = loaded.astype(np.float32)
                 self.model_loaded = True
                 self.model_path = resolved
+                self.q_table_path = resolved
+                self.last_q_table_mtime = os.path.getmtime(resolved)
                 self.mode = "q_learning"
                 print(f"[PongQAgent] Q-Matrix loaded successfully from {resolved}! Shape: {self.q_table.shape}")
                 return True

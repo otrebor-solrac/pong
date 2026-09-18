@@ -23,6 +23,7 @@ export default function ControlsPanel({
       setReloadStatus('Reloading...');
       const res = await fetch(`${apiUrl}/api/reload_models`, { method: 'POST' });
       if (res.ok) {
+        window.dispatchEvent(new CustomEvent('pong:reload_models'));
         setReloadStatus('Weights Updated!');
         setTimeout(() => setReloadStatus(''), 2500);
       } else {
@@ -36,24 +37,23 @@ export default function ControlsPanel({
   };
 
   const handlePlayer2ModeClick = async (newMode) => {
+    onModeChange(newMode);
     try {
-      const res = await fetch(`${apiUrl}/api/mode`, {
+      const endpoint = apiUrl ? `${apiUrl}/api/mode` : '/api/mode';
+      await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ mode: newMode })
       });
-      if (res.ok) {
-        onModeChange(newMode);
-      }
     } catch (err) {
-      onModeChange(newMode);
+      // Offline fallback
     }
   };
 
   return (
     <div className="controls-panel">
       <div className="panel-header">
-        <h2 className="panel-title">Match Settings</h2>
+        <h2 className="panel-title">Match settings</h2>
       </div>
 
       {/* Match Actions (Start / Pause and Restart) */}
@@ -78,18 +78,26 @@ export default function ControlsPanel({
       {/* Failure Dataset Recording */}
       <div className="control-group failure-recording-group">
         <div className="recording-header">
-          <label className="group-label">Failure Dataset</label>
-          <span className="dataset-count-badge">{failureCount} saved</span>
+          <label className="group-label">Failure dataset</label>
         </div>
-        <div className="recording-actions-grid">
-          <button
-            className={`record-toggle-btn ${recordFailures ? 'recording-active' : ''}`}
-            onClick={() => onToggleRecordFailures && onToggleRecordFailures(!recordFailures)}
-            title="Automatically save shots where the RL agent concedes a goal into data/failed_shots.json"
+        <div className="failure-switch-row">
+          <label
+            className="switch-wrapper"
+            title="Automatically log missed shots into data/failed_shots.json for clinic retraining"
           >
-            <span className={`record-dot ${recordFailures ? 'dot-active' : ''}`} />
-            {recordFailures ? 'Recording: ON' : 'Recording: OFF'}
-          </button>
+            <input
+              type="checkbox"
+              className="switch-input"
+              checked={recordFailures}
+              onChange={(e) => onToggleRecordFailures && onToggleRecordFailures(e.target.checked)}
+            />
+            <span className="switch-track">
+              <span className="switch-thumb" />
+            </span>
+            <span className={`switch-status-label ${recordFailures ? 'active' : ''}`}>
+              {recordFailures ? 'Recording on' : 'Recording off'}
+            </span>
+          </label>
           <button
             className="clear-dataset-btn"
             onClick={onClearFailures}
@@ -102,7 +110,7 @@ export default function ControlsPanel({
 
       {/* Player 1 Mode Selector (Left Paddle) */}
       <div className="control-group">
-        <label className="group-label">Player 1 (Left)</label>
+        <label className="group-label">Player 1 (left)</label>
         <div className="segmented-grid">
           <button
             className={`mode-btn-compact ${player1Mode === 'human' ? 'active' : ''}`}
@@ -139,7 +147,7 @@ export default function ControlsPanel({
 
       {/* Player 2 Mode Selector (Right Paddle / AI) */}
       <div className="control-group">
-        <label className="group-label">Player 2 (Right / AI)</label>
+        <label className="group-label">Player 2 (right / ai)</label>
         <div className="segmented-grid">
           <button
             className={`mode-btn-compact ${aiMode === 'dqn' ? 'active' : ''}`}
@@ -171,7 +179,15 @@ export default function ControlsPanel({
       {/* Model Weights Hot-Reload */}
       <div className="control-group">
         <div className="recording-header">
-          <label className="group-label">Model Weights</label>
+          <div className="label-with-info">
+            <label className="group-label">Model weights</label>
+            <div className="info-badge-wrap">
+              <span className="info-icon" tabIndex="0">i</span>
+              <div className="info-tooltip-content">
+                Hot-reload newly trained weights from disk (.onnx and .npy) into the live running session without restarting the server.
+              </div>
+            </div>
+          </div>
           {reloadStatus && <span className="weights-status-badge">{reloadStatus}</span>}
         </div>
         <button
@@ -179,14 +195,14 @@ export default function ControlsPanel({
           onClick={handleReloadWeights}
           title="Hot-reload ONNX and Q-table weights from disk without restarting"
         >
-          Reload Weights
+          Reload weights
         </button>
       </div>
 
       {/* Ball Speed Slider */}
       <div className="control-group">
         <div className="slider-header">
-          <label className="group-label">Ball Speed Multiplier</label>
+          <label className="group-label">Ball speed multiplier</label>
           <span className="slider-value">{ballSpeedMultiplier.toFixed(1)}x</span>
         </div>
         <input
