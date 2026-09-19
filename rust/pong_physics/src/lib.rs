@@ -371,12 +371,13 @@ pub extern "C" fn pong_discretize(
 #[cfg(feature = "wasm")]
 pub mod wasm_api {
     use super::*;
+    use std::cell::RefCell;
     use wasm_bindgen::prelude::*;
 
     #[wasm_bindgen]
     pub struct WasmPongEngine {
-        inner: PongPhysics,
-        q_table: Vec<f32>,
+        inner: RefCell<PongPhysics>,
+        q_table: RefCell<Vec<f32>>,
     }
 
     #[wasm_bindgen]
@@ -384,14 +385,14 @@ pub mod wasm_api {
         #[wasm_bindgen(constructor)]
         pub fn new() -> Self {
             Self {
-                inner: PongPhysics::new(),
-                q_table: Vec::new(),
+                inner: RefCell::new(PongPhysics::new()),
+                q_table: RefCell::new(Vec::new()),
             }
         }
 
         /// Load binary float32 Q-table buffer into native WASM memory
         #[wasm_bindgen]
-        pub fn load_q_table(&mut self, table_bytes: &[u8]) -> bool {
+        pub fn load_q_table(&self, table_bytes: &[u8]) -> bool {
             if table_bytes.len() % 4 != 0 {
                 return false;
             }
@@ -401,14 +402,14 @@ pub mod wasm_api {
                 let bytes: [u8; 4] = chunk.try_into().unwrap();
                 floats.push(f32::from_ne_bytes(bytes));
             }
-            self.q_table = floats;
+            *self.q_table.borrow_mut() = floats;
             true
         }
 
         /// Returns true if the full Q-table is loaded in WASM memory
         #[wasm_bindgen]
         pub fn is_q_table_loaded(&self) -> bool {
-            self.q_table.len() == (TOTAL_STATES * 3) as usize
+            self.q_table.borrow().len() == (TOTAL_STATES * 3) as usize
         }
 
         /// Compute discrete state_id directly in Rust WASM
@@ -436,14 +437,15 @@ pub mod wasm_api {
             paddle_x: f32,
             paddle_y: f32,
         ) -> u8 {
-            if self.q_table.len() != (TOTAL_STATES * 3) as usize {
+            let q_table = self.q_table.borrow();
+            if q_table.len() != (TOTAL_STATES * 3) as usize {
                 return 0; // STAY fallback while loading
             }
             let state_id = discretize_state(ball_x, ball_y, ball_vx, ball_vy, paddle_x, paddle_y);
             let base_idx = (state_id * 3) as usize;
-            let q_stay = self.q_table[base_idx];
-            let q_up = self.q_table[base_idx + 1];
-            let q_down = self.q_table[base_idx + 2];
+            let q_stay = q_table[base_idx];
+            let q_up = q_table[base_idx + 1];
+            let q_down = q_table[base_idx + 2];
 
             if q_up > q_stay && q_up >= q_down {
                 1 // UP
@@ -457,7 +459,7 @@ pub mod wasm_api {
         /// Advances game physics by sub_steps with speed_multiplier and returns updated state + events
         #[wasm_bindgen]
         pub fn step(
-            &mut self,
+            &self,
             ball_x: f32,
             ball_y: f32,
             ball_vx: f32,
@@ -480,7 +482,7 @@ pub mod wasm_api {
                 p2_vy,
             };
 
-            let outcome = self.inner.step(&mut state, sub_steps, speed_multiplier);
+            let outcome = self.inner.borrow_mut().step(&mut state, sub_steps, speed_multiplier);
 
             #[derive(serde::Serialize)]
             struct StepResponse {
