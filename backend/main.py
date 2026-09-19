@@ -5,6 +5,7 @@ FastAPI server for inference of Pong agent.
 import os
 import json
 import time
+from collections import deque
 import numpy as np
 from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -76,23 +77,62 @@ class FailureRecordInput(BaseModel):
     trajectory: Optional[List[Dict[str, Any]]] = Field(None, description="Recent frame-by-frame trajectory")
 
 
-DATA_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "failed_shots.json")
+DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
+DATA_FILE_JSONL = os.path.join(DATA_DIR, "failed_shots.jsonl")
+DATA_FILE_JSON = os.path.join(DATA_DIR, "failed_shots.json")
 
 
-def _read_failures() -> List[Dict[str, Any]]:
-    if not os.path.isfile(DATA_FILE):
+def _init_failure_storage() -> int:
+    """
+    Initialize failure storage directory and count existing failure records.
+    Automatically migrates legacy failed_shots.json to failed_shots.jsonl if needed.
+    """
+    os.makedirs(DATA_DIR, exist_ok=True)
+    count = 0
+    if os.path.isfile(DATA_FILE_JSONL):
+        try:
+            with open(DATA_FILE_JSONL, "r", encoding="utf-8") as f:
+                for line in f:
+                    if line.strip():
+                        count += 1
+            return count
+        except Exception:
+            return 0
+    elif os.path.isfile(DATA_FILE_JSON):
+        # One-time migration from monolithic JSON array to atomic JSONL
+        try:
+            with open(DATA_FILE_JSON, "r", encoding="utf-8") as f:
+                records = json.load(f)
+            with open(DATA_FILE_JSONL, "w", encoding="utf-8") as f:
+                for record in records:
+                    f.write(json.dumps(record) + "\n")
+            return len(records)
+        except Exception:
+            return 0
+    return 0
+
+
+_failure_counter = _init_failure_storage()
+
+
+def _read_recent_failures(n: int = 10) -> List[Dict[str, Any]]:
+    """
+    Efficiently read the last N failure records from the end of the JSONL file without loading the entire dataset.
+    """
+    target_file = DATA_FILE_JSONL if os.path.isfile(DATA_FILE_JSONL) else DATA_FILE_JSON
+    if not os.path.isfile(target_file):
         return []
     try:
-        with open(DATA_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
+        if target_file.endswith(".jsonl"):
+            with open(target_file, "r", encoding="utf-8") as f:
+                lines = deque(f, maxlen=n)
+            return [json.loads(line) for line in lines if line.strip()]
+        else:
+            with open(target_file, "r", encoding="utf-8") as f:
+                records = json.load(f)
+            return records[-n:] if len(records) > n else records
     except Exception:
         return []
-
-
-def _write_failures(records: List[Dict[str, Any]]) -> None:
-    os.makedirs(os.path.dirname(DATA_FILE), exist_ok=True)
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump(records, f, indent=2)
 
 
 @app.get("/")
@@ -285,12 +325,13 @@ def load_model_file(payload: LoadModelInput):
 def record_failure(payload: FailureRecordInput):
     """
     Record an episode failure shot where the RL agent conceded a goal.
-    Appends the shot origin, miss coordinates, and trajectory to failed_shots.json.
+    Appends the shot origin, miss coordinates, and trajectory to failed_shots.jsonl atomically in O(1).
     """
+    global _failure_counter
     try:
-        records = _read_failures()
+        _failure_counter += 1
         entry = {
-            "id": len(records) + 1,
+            "id": _failure_counter,
             "timestamp": time.time(),
             "agent_mode": payload.agent_mode,
             "agent_side": payload.agent_side,
@@ -300,12 +341,16 @@ def record_failure(payload: FailureRecordInput):
             "miss_impact": payload.miss_impact,
             "trajectory": payload.trajectory
         }
-        records.append(entry)
-        _write_failures(records)
+        # Atomic append: POSIX O_APPEND guarantees atomic write without reading or rewriting the full file
+        os.makedirs(DATA_DIR, exist_ok=True)
+        with open(DATA_FILE_JSONL, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry) + "\n")
+            f.flush()
+
         return {
             "status": "success",
             "recorded_id": entry["id"],
-            "total_failures": len(records)
+            "total_failures": _failure_counter
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to persist failure shot: {str(e)}")
@@ -314,14 +359,13 @@ def record_failure(payload: FailureRecordInput):
 @app.get("/api/failures")
 def get_failures():
     """
-    Retrieve statistics and recent failure records.
+    Retrieve statistics and recent failure records without loading the entire dataset.
     """
-    records = _read_failures()
     return {
         "status": "success",
-        "count": len(records),
-        "file_path": DATA_FILE,
-        "recent_samples": records[-10:] if len(records) > 10 else records
+        "count": _failure_counter,
+        "file_path": DATA_FILE_JSONL if os.path.isfile(DATA_FILE_JSONL) else DATA_FILE_JSON,
+        "recent_samples": _read_recent_failures(10)
     }
 
 
@@ -330,7 +374,14 @@ def clear_failures():
     """
     Clear all recorded failure shots.
     """
-    _write_failures([])
+    global _failure_counter
+    _failure_counter = 0
+    if os.path.isfile(DATA_FILE_JSONL):
+        with open(DATA_FILE_JSONL, "w", encoding="utf-8") as f:
+            pass
+    if os.path.isfile(DATA_FILE_JSON):
+        with open(DATA_FILE_JSON, "w", encoding="utf-8") as f:
+            f.write("[]\n")
     return {
         "status": "success",
         "message": "Failure dataset reset to empty.",

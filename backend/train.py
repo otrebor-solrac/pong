@@ -806,12 +806,27 @@ class DQNTrainer:
         if not os.path.isfile(resolved_path):
             resolved_path = failures_path
 
+        # If specified as .json but .jsonl exists (or vice versa), auto-resolve to active dataset
+        if not os.path.isfile(resolved_path):
+            if resolved_path.endswith(".json") and os.path.isfile(resolved_path + "l"):
+                resolved_path = resolved_path + "l"
+            elif resolved_path.endswith(".json") and os.path.isfile(resolved_path.replace(".json", ".jsonl")):
+                resolved_path = resolved_path.replace(".json", ".jsonl")
+            elif resolved_path.endswith(".jsonl") and os.path.isfile(resolved_path[:-1]):
+                resolved_path = resolved_path[:-1]
+
         if not os.path.isfile(resolved_path):
             print(f"Error: Failures dataset not found at: {failures_path}")
             return self.policy_net
 
         with open(resolved_path, "r", encoding="utf-8") as f:
-            failures = json.load(f)
+            content = f.read().strip()
+            if not content:
+                failures = []
+            elif content.startswith("["):
+                failures = json.loads(content)
+            else:
+                failures = [json.loads(line) for line in content.splitlines() if line.strip()]
 
         if not failures:
             print("No failure records found in dataset.")

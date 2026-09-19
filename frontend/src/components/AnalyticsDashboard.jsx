@@ -1,7 +1,7 @@
 import React from 'react';
 import { Play, Pause, RotateCcw } from 'lucide-react';
 
-export default function AnalyticsDashboard({
+function AnalyticsDashboard({
   telemetry,
   player1Mode,
   aiMode,
@@ -14,13 +14,17 @@ export default function AnalyticsDashboard({
     maxSpeed = 4.5,
     currentRallyTouches = 0,
     ralliesHistory = [],
+    totalPointsCompleted = ralliesHistory.length,
     maxRally = 0,
     avgRally = 0,
     playerScore = 0,
     aiScore = 0
   } = telemetry;
 
-  const maxTouchesInHistory = Math.max(6, ...ralliesHistory.map(r => r.touches || 0));
+  // Render bounded window of recent points for optimal 60 FPS DOM performance
+  const chartRallies = ralliesHistory.slice(-30);
+  const maxTouchesInHistory = Math.max(6, ...chartRallies.map(r => r.touches || 0));
+  const tableRallies = [...ralliesHistory].slice(-50).reverse();
 
   return (
     <div className="analytics-view">
@@ -74,7 +78,7 @@ export default function AnalyticsDashboard({
         <div className="metric-card">
           <div className="metric-card-label">Average touches</div>
           <div className="metric-card-value">{avgRally.toFixed(1)}</div>
-          <div className="metric-card-note">{ralliesHistory.length} points completed</div>
+          <div className="metric-card-note">{totalPointsCompleted || ralliesHistory.length} points completed</div>
         </div>
 
         <div className="metric-card">
@@ -89,7 +93,7 @@ export default function AnalyticsDashboard({
         <div className="panel-card-header">
           <div>
             <h3 className="panel-card-title">Touches per goal</h3>
-            <p className="panel-card-subtitle">Paddle hits exchanged before each goal and ball speed at scoring</p>
+            <p className="panel-card-subtitle">Paddle hits exchanged before each goal (latest {chartRallies.length} points)</p>
           </div>
           <div className="chart-legend">
             <span className="legend-item"><span className="legend-chip p1" /> P1 point</span>
@@ -98,9 +102,9 @@ export default function AnalyticsDashboard({
         </div>
 
         <div className="bars-stage">
-          {ralliesHistory.length > 0 ? (
+          {chartRallies.length > 0 ? (
             <div className="bars-track">
-              {ralliesHistory.map((rally) => {
+              {chartRallies.map((rally) => {
                 const heightPct = Math.min(100, Math.max(14, (rally.touches / maxTouchesInHistory) * 100));
                 const isP1 = rally.winner === 'player1';
 
@@ -135,12 +139,12 @@ export default function AnalyticsDashboard({
       </div>
 
       {/* Points Table */}
-      {ralliesHistory.length > 0 && (
+      {tableRallies.length > 0 && (
         <div className="panel-card">
           <div className="panel-card-header">
             <div>
               <h3 className="panel-card-title">Point-by-point log</h3>
-              <p className="panel-card-subtitle">Detailed chronological record of all points played</p>
+              <p className="panel-card-subtitle">Recent chronological points (latest {tableRallies.length} of {totalPointsCompleted || ralliesHistory.length})</p>
             </div>
           </div>
 
@@ -156,7 +160,7 @@ export default function AnalyticsDashboard({
                 </tr>
               </thead>
               <tbody>
-                {[...ralliesHistory].reverse().map((rally) => {
+                {tableRallies.map((rally) => {
                   const isP1 = rally.winner === 'player1';
                   return (
                     <tr key={rally.id}>
@@ -180,3 +184,5 @@ export default function AnalyticsDashboard({
     </div>
   );
 }
+
+export default React.memo(AnalyticsDashboard);

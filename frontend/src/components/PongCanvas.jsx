@@ -105,6 +105,8 @@ export default function PongCanvas({
     telemetry: {
       currentRallyTouches: 0,
       totalHits: 0,
+      totalPointsCompleted: 0,
+      totalTouchesAccumulated: 0,
       maxRally: 0,
       maxSpeed: INITIAL_BALL_SPEED,
       ralliesHistory: [],
@@ -153,6 +155,8 @@ export default function PongCanvas({
       state.telemetry = {
         currentRallyTouches: 0,
         totalHits: 0,
+        totalPointsCompleted: 0,
+        totalTouchesAccumulated: 0,
         maxRally: 0,
         maxSpeed: INITIAL_BALL_SPEED * ballSpeedMultiplier,
         ralliesHistory: [],
@@ -485,13 +489,18 @@ export default function PongCanvas({
           if (touches > state.telemetry.maxRally) {
             state.telemetry.maxRally = touches;
           }
+          state.telemetry.totalPointsCompleted += 1;
+          state.telemetry.totalTouchesAccumulated += touches;
           state.telemetry.ralliesHistory.push({
-            id: state.telemetry.ralliesHistory.length + 1,
+            id: state.telemetry.totalPointsCompleted,
             touches,
             winner: 'ai',
             score: `${state.playerScore} - ${state.aiScore}`,
             maxSpeed: Math.round(state.telemetry.currentRallyMaxSpeed * 10) / 10
           });
+          if (state.telemetry.ralliesHistory.length > 60) {
+            state.telemetry.ralliesHistory.shift();
+          }
 
           // Log failure if Player 1 is an RL model
           if (recordFailures && (player1Mode === 'dqn' || player1Mode === 'q_learning')) {
@@ -542,13 +551,18 @@ export default function PongCanvas({
           if (touches > state.telemetry.maxRally) {
             state.telemetry.maxRally = touches;
           }
+          state.telemetry.totalPointsCompleted += 1;
+          state.telemetry.totalTouchesAccumulated += touches;
           state.telemetry.ralliesHistory.push({
-            id: state.telemetry.ralliesHistory.length + 1,
+            id: state.telemetry.totalPointsCompleted,
             touches,
             winner: 'player1',
             score: `${state.playerScore} - ${state.aiScore}`,
             maxSpeed: Math.round(state.telemetry.currentRallyMaxSpeed * 10) / 10
           });
+          if (state.telemetry.ralliesHistory.length > 60) {
+            state.telemetry.ralliesHistory.shift();
+          }
 
           // Log failure if Player 2 / AI is an RL model
           if (recordFailures && (aiMode === 'dqn' || aiMode === 'q_learning')) {
@@ -621,9 +635,8 @@ export default function PongCanvas({
             state.telemetry.speedHistory.shift();
           }
 
-          const rallies = state.telemetry.ralliesHistory;
-          const avgRally = rallies.length > 0
-            ? Number((rallies.reduce((acc, r) => acc + r.touches, 0) / rallies.length).toFixed(1))
+          const avgRally = state.telemetry.totalPointsCompleted > 0
+            ? Number((state.telemetry.totalTouchesAccumulated / state.telemetry.totalPointsCompleted).toFixed(1))
             : 0;
 
           if (onTelemetryUpdate) {
@@ -632,7 +645,8 @@ export default function PongCanvas({
               maxSpeed: Math.round(state.telemetry.maxSpeed * 10) / 10,
               speedHistory: [...state.telemetry.speedHistory],
               currentRallyTouches: state.telemetry.currentRallyTouches,
-              ralliesHistory: [...rallies],
+              ralliesHistory: [...state.telemetry.ralliesHistory],
+              totalPointsCompleted: state.telemetry.totalPointsCompleted,
               maxRally: state.telemetry.maxRally,
               avgRally,
               totalHits: state.telemetry.totalHits,
