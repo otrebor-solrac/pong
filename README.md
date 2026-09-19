@@ -1,5 +1,7 @@
 # Pong RL Studio
 
+![Pong RL Studio interface](doc/pong.png)
+
 An interactive reinforcement learning environment and research suite for Pong. The platform features tabular Q-learning, deep Q-networks with n-step experience replay, a unified high-performance physics engine written in Rust compiled to both WebAssembly and native shared libraries, accelerated inference via ONNX Runtime, and a responsive web interface built with React.
 
 ## Key features
