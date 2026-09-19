@@ -17,6 +17,7 @@ env/
 # Logs y Temporales
 logs/
 *.log
+data/*.jsonl
 .DS_Store
 
 # Checkpoints intermediarios (conservar modelos principales)

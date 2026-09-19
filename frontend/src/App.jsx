@@ -12,6 +12,7 @@ const initialTelemetry = {
   speedHistory: [],
   currentRallyTouches: 0,
   ralliesHistory: [],
+  totalPointsCompleted: 0,
   maxRally: 0,
   avgRally: 0,
   totalHits: 0,
@@ -175,16 +176,18 @@ export default function App() {
         </main>
       </div>
 
-      {/* Full-Screen Analytics View */}
+      {/* Full-Screen Analytics View (lazy-rendered when active tab to avoid background DOM overhead) */}
       <div className={`tab-view-container ${activeTab === 'analytics' ? 'view-active' : 'view-hidden'}`}>
-        <AnalyticsDashboard
-          telemetry={telemetry}
-          player1Mode={player1Mode}
-          aiMode={aiMode}
-          gameRunning={gameRunning}
-          setGameRunning={setGameRunning}
-          onResetMetrics={handleRestartMatch}
-        />
+        {activeTab === 'analytics' && (
+          <AnalyticsDashboard
+            telemetry={telemetry}
+            player1Mode={player1Mode}
+            aiMode={aiMode}
+            gameRunning={gameRunning}
+            setGameRunning={setGameRunning}
+            onResetMetrics={handleRestartMatch}
+          />
+        )}
       </div>
     </div>
   );
