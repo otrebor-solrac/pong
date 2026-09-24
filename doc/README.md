@@ -36,7 +36,7 @@ This documentation details the complete stack, from analytical mechanics and con
 
 5. [Failure diagnosis and targeted replay (failure clinic)](05_failure_diagnosis_and_clinic.md)
    - Empirical failure diagnosis: Markovian rebound blindness.
-   - Failure snapshot recording and persistence (`failed_shots.json`).
+   - Failure snapshot recording and persistence (`failed_shots.jsonl`).
    - Targeted counterfactual exploration and micro-training.
    - Anchor gameplay insertion against catastrophic forgetting.
    - Regression-free model saving protocol.
