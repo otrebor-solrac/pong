@@ -47,8 +47,14 @@ train:
 train-dqn:
 	docker compose run --rm pong python3 /workspace/backend/train.py --algo dqn $(ARGS)
 
+train-dqn-noblind:
+	docker compose run --rm pong python3 /workspace/backend/train.py --algo dqn --model_variant noblind $(ARGS)
+
 eval-dqn:
 	docker compose run --rm pong python3 /workspace/backend/train.py --algo dqn --eval --episodes 200 --opponent heuristic --pretrained models/dqn_pong.onnx $(ARGS)
+
+eval-dqn-noblind:
+	docker compose run --rm pong python3 /workspace/backend/train.py --algo dqn --eval --episodes 200 --opponent heuristic --pretrained models/dqn_noblind.onnx $(ARGS)
 
 eval-heuristic:
 	docker compose run --rm pong python3 /workspace/backend/train.py --algo heuristic --eval --episodes 200 --opponent heuristic $(ARGS)
@@ -57,7 +63,7 @@ eval-tabular:
 	docker compose run --rm pong python3 /workspace/backend/train.py --algo q_learning --eval --episodes 200 --opponent heuristic --pretrained models/q_table.npy $(ARGS)
 
 train-failures:
-	docker compose run --rm pong python3 /workspace/backend/train.py --algo dqn --train_failures data/failed_shots.json $(ARGS)
+	docker compose run --rm pong python3 /workspace/backend/train.py --algo dqn --train_failures data/failed_shots.jsonl $(ARGS)
 
 clean:
 	rm -rf logs/*.log frontend/node_modules backend/__pycache__

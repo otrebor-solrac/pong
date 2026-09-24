@@ -9,6 +9,8 @@ const PLAYER_PADDLE_SPEED = 5.5;
 const AI_PADDLE_SPEED = 5.5;
 const INITIAL_BALL_SPEED = 4.5;
 const PADDLE_FRICTION = 0.35;
+const P1_X = 30;
+const P2_X = FIELD_WIDTH - 30;
 
 export default function PongCanvas({
   player1Mode = 'human',
@@ -137,9 +139,13 @@ export default function PongCanvas({
       ball_y: state.ballY,
       ball_vx: state.ballVx,
       ball_vy: state.ballVy,
-      paddle_x: FIELD_WIDTH / 2,
+      paddle_x: dirX > 0 ? P1_X : P2_X,
       paddle_y: dirX > 0 ? state.playerY : state.aiY,
-      type: 'serve'
+      defender_paddle_y: dirX > 0 ? state.aiY : state.playerY,
+      p1_paddle_y: state.playerY,
+      p2_paddle_y: state.aiY,
+      type: 'serve',
+      side: dirX > 0 ? 'p1' : 'p2'
     };
   }, [ballSpeedMultiplier]);
 
@@ -174,6 +180,13 @@ export default function PongCanvas({
 
   useEffect(() => {
     const handleKeyDown = (e) => {
+      if (e.code === 'Space') {
+        e.preventDefault();
+        if (typeof setGameRunning === 'function') {
+          setGameRunning(prev => !prev);
+        }
+        return;
+      }
       if (['ArrowUp', 'ArrowDown', 'KeyW', 'KeyS'].includes(e.code)) {
         e.preventDefault();
         gameState.current.keys[e.code] = true;
@@ -192,14 +205,14 @@ export default function PongCanvas({
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
     };
-  }, []);
+  }, [setGameRunning]);
 
   const fetchAiPrediction = useCallback(async () => {
     const state = gameState.current;
     const isWasmQReady = wasmEngineRef.current?.is_q_table_loaded?.();
 
-    // Player 2 (Right Paddle) -> Remote RL API (DQN or fallback if WASM Q-table is not yet ready)
-    if (aiMode === 'dqn' || (aiMode === 'q_learning' && !isWasmQReady)) {
+    // Player 2 (Right Paddle) -> Remote RL API (DQN / DQN No-Blind or fallback if WASM Q-table is not yet ready)
+    if (aiMode === 'dqn' || aiMode === 'dqn_noblind' || (aiMode === 'q_learning' && !isWasmQReady)) {
       try {
         const t0 = performance.now();
         const response = await fetch(`${apiUrl}/api/predict`, {
@@ -232,8 +245,8 @@ export default function PongCanvas({
       }
     }
 
-    // Player 1 (Left Paddle) -> Remote RL API (DQN or fallback if WASM Q-table is not yet ready)
-    if (player1Mode === 'dqn' || (player1Mode === 'q_learning' && !isWasmQReady)) {
+    // Player 1 (Left Paddle) -> Remote RL API (DQN / DQN No-Blind or fallback if WASM Q-table is not yet ready)
+    if (player1Mode === 'dqn' || player1Mode === 'dqn_noblind' || (player1Mode === 'q_learning' && !isWasmQReady)) {
       try {
         const response = await fetch(`${apiUrl}/api/predict`, {
           method: 'POST',
@@ -328,7 +341,7 @@ export default function PongCanvas({
           } else if (state.p1TargetAction === 2) {
             state.playerY = Math.min(FIELD_HEIGHT - PADDLE_HEIGHT / 2, state.playerY + AI_PADDLE_SPEED);
           }
-        } else if (player1Mode === 'dqn') {
+        } else if (player1Mode === 'dqn' || player1Mode === 'dqn_noblind') {
           // Remote DQN action for Player 1
           if (state.p1TargetAction === 1) {
             state.playerY = Math.max(PADDLE_HEIGHT / 2, state.playerY - AI_PADDLE_SPEED);
@@ -386,7 +399,7 @@ export default function PongCanvas({
           } else if (state.aiTargetAction === 2) { // DOWN
             state.aiY = Math.min(FIELD_HEIGHT - PADDLE_HEIGHT / 2, state.aiY + AI_PADDLE_SPEED);
           }
-        } else if (aiMode === 'dqn') {
+        } else if (aiMode === 'dqn' || aiMode === 'dqn_noblind') {
           // Remote DQN inference for Player 2
           if (state.aiTargetAction === 1) { // UP
             state.aiY = Math.max(PADDLE_HEIGHT / 2, state.aiY - AI_PADDLE_SPEED);
@@ -448,6 +461,9 @@ export default function PongCanvas({
                 ball_vy: state.ballVy,
                 paddle_x: p1X,
                 paddle_y: state.playerY,
+                defender_paddle_y: state.aiY,
+                p1_paddle_y: state.playerY,
+                p2_paddle_y: state.aiY,
                 side: 'p1'
               };
             }
@@ -469,6 +485,9 @@ export default function PongCanvas({
                 ball_vy: state.ballVy,
                 paddle_x: p2X,
                 paddle_y: state.aiY,
+                defender_paddle_y: state.playerY,
+                p1_paddle_y: state.playerY,
+                p2_paddle_y: state.aiY,
                 side: 'p2'
               };
             }
@@ -503,14 +522,18 @@ export default function PongCanvas({
           }
 
           // Log failure if Player 1 is an RL model
-          if (recordFailures && (player1Mode === 'dqn' || player1Mode === 'q_learning')) {
+          if (recordFailures && (player1Mode === 'dqn' || player1Mode === 'dqn_noblind' || player1Mode === 'q_learning')) {
             const origin = state.lastShotOrigin || {
               ball_x: FIELD_WIDTH / 2,
               ball_y: FIELD_HEIGHT / 2,
               ball_vx: state.ballVx,
               ball_vy: state.ballVy,
               paddle_x: p2X,
-              paddle_y: state.aiY
+              paddle_y: state.aiY,
+              defender_paddle_y: state.playerY,
+              p1_paddle_y: state.playerY,
+              p2_paddle_y: state.aiY,
+              side: 'p2'
             };
             fetch(`${apiUrl}/api/record_failure`, {
               method: 'POST',
@@ -565,14 +588,18 @@ export default function PongCanvas({
           }
 
           // Log failure if Player 2 / AI is an RL model
-          if (recordFailures && (aiMode === 'dqn' || aiMode === 'q_learning')) {
+          if (recordFailures && (aiMode === 'dqn' || aiMode === 'dqn_noblind' || aiMode === 'q_learning')) {
             const origin = state.lastShotOrigin || {
               ball_x: FIELD_WIDTH / 2,
               ball_y: FIELD_HEIGHT / 2,
               ball_vx: state.ballVx,
               ball_vy: state.ballVy,
               paddle_x: p1X,
-              paddle_y: state.playerY
+              paddle_y: state.playerY,
+              defender_paddle_y: state.aiY,
+              p1_paddle_y: state.playerY,
+              p2_paddle_y: state.aiY,
+              side: 'p1'
             };
             fetch(`${apiUrl}/api/record_failure`, {
               method: 'POST',
@@ -612,8 +639,8 @@ export default function PongCanvas({
         // Remote API Prediction Polling (Every 16ms / per-frame, only when DQN or un-cached Q-learning is in use)
         const isWasmQReady = wasmEngineRef.current?.is_q_table_loaded?.();
         const needsRemotePrediction =
-          (aiMode === 'dqn' || (aiMode === 'q_learning' && !isWasmQReady)) ||
-          (player1Mode === 'dqn' || (player1Mode === 'q_learning' && !isWasmQReady));
+          (aiMode === 'dqn' || aiMode === 'dqn_noblind' || (aiMode === 'q_learning' && !isWasmQReady)) ||
+          (player1Mode === 'dqn' || player1Mode === 'dqn_noblind' || (player1Mode === 'q_learning' && !isWasmQReady));
 
         if (timestamp - state.lastPredictTime > 16 && !state.isPredicting && needsRemotePrediction) {
           state.isPredicting = true;
@@ -736,13 +763,36 @@ export default function PongCanvas({
         </div>
       </div>
 
-      <div className="canvas-container">
+      <div
+        className="canvas-container"
+        onClick={() => {
+          if (!gameRunning && typeof setGameRunning === 'function') {
+            setGameRunning(true);
+          }
+        }}
+      >
         <canvas
           ref={canvasRef}
           width={FIELD_WIDTH}
           height={FIELD_HEIGHT}
           className="pong-canvas"
         />
+        {!gameRunning && (
+          <div className="canvas-pause-overlay">
+            <button
+              className="btn-start-overlay"
+              onClick={(e) => {
+                e.stopPropagation();
+                if (typeof setGameRunning === 'function') {
+                  setGameRunning(true);
+                }
+              }}
+            >
+              ▶ Start Match
+            </button>
+            <span className="overlay-hint">Click or press Space to play</span>
+          </div>
+        )}
       </div>
     </div>
   );

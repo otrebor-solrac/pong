@@ -160,18 +160,34 @@ class FastPongEnv:
         """
         self.opp_speed_ratio = float(np.clip(ratio, 0.30, 1.0))
 
-    def get_continuous_state(self) -> np.ndarray:
+    def get_continuous_state(self, dim: int = 4) -> np.ndarray:
         """
-        Return the continuous state vector for DQN: [dx_norm, dy_norm, vx_norm, vy_norm]
+        Return the continuous state vector for DQN:
+          - dim=4 (classic): [dx_norm, dy_norm, vx_norm, vy_norm]
+          - dim=5 (no-blind): [dx_norm, dy_norm, vx_norm, vy_norm, opp_y_norm]
         """
         dx = abs(self.ai_x - self.ball_x)
         dy = self.ball_y - self.ai_y
+
+        if dim == 5:
+            opp_y_norm = float(np.clip((self.opponent_y - FIELD_HEIGHT / 2.0) / (FIELD_HEIGHT / 2.0), -1.0, 1.0))
+            return np.array([
+                float(np.clip(dx / MAX_DX, 0.0, 1.0)),
+                float(np.clip(dy / MAX_DY, -1.0, 1.0)),
+                float(np.clip(self.ball_vx / MAX_BALL_SPEED, -1.0, 1.0)),
+                float(np.clip(self.ball_vy / MAX_BALL_SPEED, -1.0, 1.0)),
+                opp_y_norm
+            ], dtype=np.float32)
 
         self._state_buffer[0] = np.clip(dx / MAX_DX, 0.0, 1.0)
         self._state_buffer[1] = np.clip(dy / MAX_DY, -1.0, 1.0)
         self._state_buffer[2] = np.clip(self.ball_vx / MAX_BALL_SPEED, -1.0, 1.0)
         self._state_buffer[3] = np.clip(self.ball_vy / MAX_BALL_SPEED, -1.0, 1.0)
         return self._state_buffer.copy()
+
+    def get_continuous_state_5d(self) -> np.ndarray:
+        """Helper for 5-dimensional continuous state vector."""
+        return self.get_continuous_state(dim=5)
 
     def reset(self) -> Tuple[int, Dict[str, Any]]:
         """
@@ -220,7 +236,8 @@ class FastPongEnv:
             paddle_x=self.ai_x,
             paddle_y=self.ai_y
         )
-        info["continuous_state"] = self.get_continuous_state()
+        info["continuous_state"] = self.get_continuous_state(dim=4)
+        info["continuous_state_5d"] = self.get_continuous_state(dim=5)
         return state_id, info
 
     def reset_to_shot(self, shot: Dict[str, Any]) -> Tuple[int, Dict[str, Any]]:
@@ -241,7 +258,11 @@ class FastPongEnv:
         orig_vx = origin.get("ball_vx", 5.0)
         orig_vy = origin.get("ball_vy", 0.0)
 
-        initial_ai_y = miss.get("paddle_y", FIELD_HEIGHT / 2.0)
+        # Authentic pre-shot paddle coordinate: use defender_paddle_y from shot_origin if available;
+        # otherwise gracefully fall back to miss_impact paddle coordinate for legacy datasets.
+        initial_ai_y = origin.get("defender_paddle_y")
+        if initial_ai_y is None:
+            initial_ai_y = miss.get("paddle_y", FIELD_HEIGHT / 2.0)
 
         if side == "p1" or orig_vx < 0:
             # Shot was incoming to left paddle. Mirror horizontally to right paddle (AI side)
@@ -399,6 +420,13 @@ class FastPongEnv:
 
             if abs(self.ball_vy) > 3.0:
                 edge_bonus += (abs(self.ball_vy) / MAX_BALL_SPEED) * 1.5
+
+            # Tactical cross-court placement bonus: reward directing ball into open court away from opponent
+            opp_norm = (self.opponent_y - FIELD_HEIGHT / 2.0) / (FIELD_HEIGHT / 2.0)
+            ball_dir = self.ball_vy / MAX_BALL_SPEED
+            if (opp_norm > 0.2 and ball_dir < -0.15) or (opp_norm < -0.2 and ball_dir > 0.15):
+                edge_bonus += 2.0
+
         # In Rust: goal_p1 = true when ball_x > FIELD_WIDTH (P1 scores on right, so AI missed ball)
         missed_ball = outcome.goal_p1
         done = scored_goal or missed_ball
@@ -415,7 +443,8 @@ class FastPongEnv:
             paddle_x=self.ai_x,
             paddle_y=self.ai_y
         )
-        info["continuous_state"] = self.get_continuous_state()
+        info["continuous_state"] = self.get_continuous_state(dim=4)
+        info["continuous_state_5d"] = self.get_continuous_state(dim=5)
         info["hit_ai_paddle"] = hit_ai_paddle
         info["scored_goal"] = scored_goal
         info["missed_ball"] = missed_ball

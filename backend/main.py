@@ -35,14 +35,15 @@ app.add_middleware(
 
 agent = PongQAgent(mode="dqn")
 
-# Load both models if they exist for smooth switching in frontend
+# Load all available models for smooth switching in frontend
 has_q = agent.load_q_table("models/q_table.npy")
-has_onnx = agent.load_onnx_model("models/dqn_pong.onnx")
+has_onnx_4d = agent.load_onnx_model("models/dqn_pong.onnx")
+has_onnx_5d = agent.load_onnx_model("models/dqn_noblind.onnx")
 
-if not has_onnx and not has_q:
+if not has_onnx_4d and not has_onnx_5d and not has_q:
     agent.mode = "heuristic"
 else:
-    agent.mode = "dqn" if has_onnx else "q_learning"
+    agent.mode = "dqn" if has_onnx_4d else ("dqn_noblind" if has_onnx_5d else "q_learning")
 
 
 # Pydantic Models / Schemas
@@ -56,11 +57,11 @@ class PongStateInput(BaseModel):
     player_paddle_y: Optional[float] = Field(None, description="Player paddle Y position (center of the paddle)")
     field_width: float = Field(800.0, description="Field width in pixels")
     field_height: float = Field(500.0, description="Field height in pixels")
-    mode: Optional[str] = Field(None, description="Optional inference mode: 'dqn', 'q_learning', 'heuristic', 'random'")
+    mode: Optional[str] = Field(None, description="Optional inference mode: 'dqn', 'dqn_noblind', 'q_learning', 'heuristic', 'random'")
 
 
 class ModeInput(BaseModel):
-    mode: str = Field(..., description="Operation mode: 'random', 'q_learning', or 'heuristic'")
+    mode: str = Field(..., description="Operation mode: 'random', 'q_learning', 'dqn', 'dqn_noblind', or 'heuristic'")
 
 
 class LoadModelInput(BaseModel):
@@ -209,7 +210,7 @@ def predict_action(payload: PongStateInput):
     try:
         agent.check_auto_reload()
         # Allow specifying the mode per request without depending on a global variable
-        target_mode = payload.mode if payload.mode in ["dqn", "q_learning", "heuristic", "random"] else agent.mode
+        target_mode = payload.mode if payload.mode in ["dqn", "dqn_noblind", "q_learning", "heuristic", "random"] else agent.mode
         prev_mode = agent.mode
         agent.mode = target_mode
         try:
@@ -220,6 +221,7 @@ def predict_action(payload: PongStateInput):
                 ball_vy=payload.ball_vy,
                 paddle_x=payload.ai_paddle_x,
                 paddle_y=payload.ai_paddle_y,
+                player_paddle_y=payload.player_paddle_y,
                 field_width=payload.field_width,
                 field_height=payload.field_height
             )
@@ -260,9 +262,9 @@ def predict_action(payload: PongStateInput):
 @app.post("/api/mode")
 def set_mode(payload: ModeInput):
     """
-    Change the mode of the AI agent between 'random', 'q_learning', 'dqn' and 'heuristic'.
+    Change the mode of the AI agent between 'random', 'q_learning', 'dqn', 'dqn_noblind' and 'heuristic'.
     """
-    valid_modes = ["random", "q_learning", "dqn", "heuristic"]
+    valid_modes = ["random", "q_learning", "dqn", "dqn_noblind", "heuristic"]
     if payload.mode not in valid_modes:
         raise HTTPException(
             status_code=400,
@@ -279,6 +281,9 @@ def set_mode(payload: ModeInput):
     
     elif payload.mode == "dqn":
         loaded = agent.load_onnx_model("models/dqn_pong.onnx") or agent.load_dqn_model("models/dqn_pong.pth")
+
+    elif payload.mode == "dqn_noblind":
+        loaded = agent.load_onnx_model("models/dqn_noblind.onnx") or agent.load_dqn_model("models/dqn_noblind.pth")
         
     return {
         "status": "success",
@@ -392,14 +397,16 @@ def clear_failures():
 @app.post("/api/reload_models")
 def reload_models():
     """
-    Force reload Q-table and ONNX DQN models from disk without restarting the service.
+    Force reload Q-table and ONNX DQN models (4D and 5D) from disk without restarting the service.
     """
     has_q = agent.load_q_table("models/q_table.npy")
-    has_onnx = agent.load_onnx_model("models/dqn_pong.onnx")
+    has_onnx_4d = agent.load_onnx_model("models/dqn_pong.onnx")
+    has_onnx_5d = agent.load_onnx_model("models/dqn_noblind.onnx")
     return {
         "status": "success",
         "q_table_loaded": has_q,
-        "onnx_loaded": has_onnx,
+        "onnx_4d_loaded": has_onnx_4d,
+        "onnx_5d_loaded": has_onnx_5d,
         "mode": agent.mode,
         "message": "Weights reloaded successfully from disk."
     }

@@ -127,8 +127,16 @@ export default function ControlsPanel({
           <button
             className={`mode-btn-compact ${player1Mode === 'dqn' ? 'active' : ''}`}
             onClick={() => onPlayer1ModeChange('dqn')}
+            title="DQN Classic 4D (Ball trajectory perception only)"
           >
-            DQN
+            DQN (4D)
+          </button>
+          <button
+            className={`mode-btn-compact ${player1Mode === 'dqn_noblind' ? 'active' : ''}`}
+            onClick={() => onPlayer1ModeChange('dqn_noblind')}
+            title="DQN No-Blind 5D (Perceives opponent paddle for tactical cross-court counter-attacks)"
+          >
+            DQN No-Blind
           </button>
           <button
             className={`mode-btn-compact ${player1Mode === 'q_learning' ? 'active' : ''}`}
@@ -152,8 +160,16 @@ export default function ControlsPanel({
           <button
             className={`mode-btn-compact ${aiMode === 'dqn' ? 'active' : ''}`}
             onClick={() => handlePlayer2ModeClick('dqn')}
+            title="DQN Classic 4D (Ball trajectory perception only)"
           >
-            DQN
+            DQN (4D)
+          </button>
+          <button
+            className={`mode-btn-compact ${aiMode === 'dqn_noblind' ? 'active' : ''}`}
+            onClick={() => handlePlayer2ModeClick('dqn_noblind')}
+            title="DQN No-Blind 5D (Perceives opponent paddle for tactical cross-court counter-attacks)"
+          >
+            DQN No-Blind
           </button>
           <button
             className={`mode-btn-compact ${aiMode === 'q_learning' ? 'active' : ''}`}

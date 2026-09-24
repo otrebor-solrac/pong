@@ -83,6 +83,8 @@ class TabularConfig:
 
 @dataclass
 class DQNConfig:
+    input_dim: int = 4
+    model_variant: str = "classic"  # 'classic' (4D) or 'noblind' (5D)
     total_episodes: int = 1200
     batch_size: int = 256
     gamma: float = 0.99         # Temporal horizon extended (100 effective steps)
@@ -221,9 +223,12 @@ class TabularTrainer:
         avg_goals = float(np.mean(eval_goals)) if eval_goals else 0.0
         max_h = int(max(eval_hits)) if eval_hits else 0
 
-        # Distribution-based robust quality score:
+        # Balanced Robust Quality Score:
+        # Evaluates defensive consistency (mean, median, floor) and penalizes erratic play (IQR).
+        # Goals are heavily weighted (x30.0) so that significant offensive improvements 
+        # (e.g. winning fast) are correctly valued over merely sustaining long, passive rallies.
         hit_score = (avg_hits + p50_hits + p25_hits) / 3.0 - (iqr_hits / 4.0)
-        score = (hit_score + avg_goals * 5.0) if self.config.opponent == "heuristic" else hit_score
+        score = (hit_score + avg_goals * 30.0) if self.config.opponent == "heuristic" else hit_score
         return avg_hits, avg_goals, score, max_h
 
     def train(self) -> np.ndarray:
@@ -428,8 +433,8 @@ class DQNTrainer:
         self.env = FastPongEnv(opponent=self.cfg.opponent)
 
         # Main policy network and target network
-        self.policy_net = PongDQN(input_dim=4, hidden_dim=64, output_dim=NUM_ACTIONS).to(self.device)
-        self.target_net = PongDQN(input_dim=4, hidden_dim=64, output_dim=NUM_ACTIONS).to(self.device)
+        self.policy_net = PongDQN(input_dim=self.cfg.input_dim, hidden_dim=64, output_dim=NUM_ACTIONS).to(self.device)
+        self.target_net = PongDQN(input_dim=self.cfg.input_dim, hidden_dim=64, output_dim=NUM_ACTIONS).to(self.device)
 
         # Storage paths
         self.resolved_save_path = os.path.join(os.path.dirname(__file__), "..", self.cfg.save_path)
@@ -519,7 +524,7 @@ class DQNTrainer:
         ep_iter = tqdm(range(n_episodes), desc="Evaluating", unit="ep") if show_progress else range(n_episodes)
         for _ in ep_iter:
             self.env.reset()
-            state = self.env.get_continuous_state()
+            state = self.env.get_continuous_state(dim=self.cfg.input_dim)
             done = False
             steps = 0
             ep_hits = 0
@@ -537,7 +542,7 @@ class DQNTrainer:
                     ep_hits += 1
                 if info.get("scored_goal"):
                     ep_goals += 1
-                state = self.env.get_continuous_state()
+                state = self.env.get_continuous_state(dim=self.cfg.input_dim)
 
             hits_list.append(ep_hits)
             goals_list.append(ep_goals)
@@ -569,7 +574,7 @@ class DQNTrainer:
         torch.save(self.policy_net.state_dict(), self.resolved_save_path)
         try:
             self.policy_net.eval()
-            dummy_input = torch.zeros(1, 4, dtype=torch.float32, device=self.device)
+            dummy_input = torch.zeros(1, self.cfg.input_dim, dtype=torch.float32, device=self.device)
             torch.onnx.export(
                 self.policy_net,
                 dummy_input,
@@ -664,8 +669,8 @@ class DQNTrainer:
                     self.env.set_opponent_speed_ratio(current_opp_ratio)
 
                 self.env.reset()
-                # State: Normalize paddle y, ball x, ball y, ball vx, ball vy
-                state = self.env.get_continuous_state()
+                # State: continuous normalized features
+                state = self.env.get_continuous_state(dim=cfg.input_dim)
                 # done flag for episode termination
                 done = False
                 # Number of steps in current episode
@@ -692,7 +697,7 @@ class DQNTrainer:
                             action = int(q_vals.argmax(dim=1).item())
 
                     _, reward, done, info = self.env.step(action)
-                    next_state = self.env.get_continuous_state()
+                    next_state = self.env.get_continuous_state(dim=cfg.input_dim)
 
                     if info.get("hit_ai_paddle"):
                         episode_hits += 1
@@ -795,7 +800,7 @@ class DQNTrainer:
         print("=" * 65)
         return self.policy_net
 
-    def train_failures(self, failures_path: str, attempts_per_shot: int = 10, anchor_episodes: int = 30) -> PongDQN:
+    def train_failures(self, failures_path: str, max_failures: int = 250, attempts_per_shot: int = 10, anchor_episodes: int = 30, eval_episodes: int = 200) -> PongDQN:
         """
         Failure-Targeted Replay Training (Failure Clinic).
         Loads snapshots of shots where the agent conceded a goal and runs targeted
@@ -832,18 +837,28 @@ class DQNTrainer:
             print("No failure records found in dataset.")
             return self.policy_net
 
+        if len(failures) > max_failures:
+            print(f"Dataset has {len(failures)} failures. Randomly sampling {max_failures} to prevent catastrophic forgetting.")
+            failures = random.sample(failures, max_failures)
+
+        dynamic_anchor = max(10, len(failures) // 2)
+        if anchor_episodes < dynamic_anchor:
+            anchor_episodes = dynamic_anchor
+        eval_episodes = min(eval_episodes, 50)
+
         print("=" * 65)
         print("Starting Failure-Targeted Clinic for DQN (Balanced Anchor Mode)")
         print(f"   - Dataset: {resolved_path} ({len(failures)} failure shots)")
         print(f"   - Max attempts per shot: {attempts_per_shot}")
         print(f"   - Balanced anchor episodes: {anchor_episodes}")
+        print(f"   - Evaluation episodes: {eval_episodes}")
         print(f"   - Device: {self.device}")
         print("=" * 65)
 
         # Establish protected baseline score before clinic training
         self.best_weights = copy.deepcopy(self.policy_net.state_dict())
-        print("Evaluating pre-clinic baseline performance (40 episodes, pure greedy)...")
-        b_hits, b_goals, b_score, b_max = self.evaluate(n_episodes=40)
+        print(f"Evaluating pre-clinic baseline performance ({eval_episodes} episodes, pure greedy)...")
+        b_hits, b_goals, b_score, b_max = self.evaluate(n_episodes=eval_episodes, show_progress=True)
         self.best_score = b_score
         print(
             f"Pre-clinic Baseline Skill | "
@@ -859,7 +874,7 @@ class DQNTrainer:
             anchor_pbar = tqdm(range(anchor_episodes), desc="Anchor Games", unit="ep")
             for _ in anchor_pbar:
                 self.env.reset()
-                state = self.env.get_continuous_state()
+                state = self.env.get_continuous_state(dim=self.cfg.input_dim)
                 done = False
                 prev_action = 0
                 step_count = 0
@@ -873,7 +888,7 @@ class DQNTrainer:
                             action = int(self.policy_net(state_t).argmax(dim=1).item())
 
                     _, reward, done, info = self.env.step(action)
-                    next_state = self.env.get_continuous_state()
+                    next_state = self.env.get_continuous_state(dim=self.cfg.input_dim)
                     if action != prev_action and step_count > 1:
                         reward -= self.cfg.jitter_penalty
                     prev_action = action
@@ -883,6 +898,13 @@ class DQNTrainer:
             self.env.opponent = saved_opp
             print(f"Anchor initialized! Replay buffer contains {len(self.replay_buffer)} balanced transitions.\n")
 
+        print("\n--- CLINIC 'FINE SURGERY' ACTIVE ---")
+        original_lr = self.optimizer.param_groups[0]['lr']
+        clinic_lr = original_lr * 0.2
+        print(f"Temporarily reducing Learning Rate: {original_lr:.6f} -> {clinic_lr:.6f} for failure targeting")
+        for param_group in self.optimizer.param_groups:
+            param_group['lr'] = clinic_lr
+
         total_saved = 0
         pbar = tqdm(failures, desc="Failures Clinic", unit="shot")
 
@@ -890,16 +912,17 @@ class DQNTrainer:
             saved = False
 
             for attempt in range(1, attempts_per_shot + 1):
-                # Guided exploration noise: start at 0.35, decay towards 0.05
-                epsilon = max(0.05, 0.35 * (1.0 - (attempt - 1) / float(attempts_per_shot)))
+                # Guided exploration noise: start at 0.65, decay towards 0.05
+                epsilon = max(0.05, 0.65 * (1.0 - (attempt - 1) / float(attempts_per_shot)))
 
                 self.env.reset_to_shot(shot)
-                state = self.env.get_continuous_state()
+                state = self.env.get_continuous_state(dim=self.cfg.input_dim)
+                intercepted = False
                 done = False
                 steps = 0
                 prev_action = 0
 
-                while not done and steps < 250:
+                while not done and steps < 350:
                     steps += 1
                     if random.random() < epsilon:
                         action = random.randint(0, NUM_ACTIONS - 1)
@@ -910,12 +933,13 @@ class DQNTrainer:
                             action = int(q_vals.argmax(dim=1).item())
 
                     _, reward, done, info = self.env.step(action)
-                    next_state = self.env.get_continuous_state()
+                    next_state = self.env.get_continuous_state(dim=self.cfg.input_dim)
 
-                    # High redemption bonus for successfully intercepting the shot
-                    if info.get("hit_ai_paddle"):
+                    # High redemption bonus for successfully intercepting the initial failure trajectory
+                    if info.get("hit_ai_paddle") and not intercepted:
                         reward += 5.0
                         saved = True
+                        intercepted = True
 
                     if action != prev_action and steps > 1:
                         reward -= self.cfg.jitter_penalty
@@ -927,8 +951,8 @@ class DQNTrainer:
                     if len(self.replay_buffer) >= 32:
                         self.train_step(batch_size=min(64, len(self.replay_buffer)))
 
-                    if info.get("hit_ai_paddle"):
-                        break
+                    # NOTE: Do NOT break on hit_ai_paddle! Continue rally until 'done'
+                    # so the agent learns to place returns, maintain rallies, and score goals.
 
                 if saved:
                     total_saved += 1
@@ -936,6 +960,33 @@ class DQNTrainer:
                     for _ in range(4):
                         self.train_step(batch_size=min(64, len(self.replay_buffer)))
                     break
+
+            # Interleave 1 standard baseline rally episode to prevent catastrophic forgetting
+            self.env.reset()
+            norm_state = self.env.get_continuous_state(dim=self.cfg.input_dim)
+            norm_done = False
+            norm_steps = 0
+            norm_prev_action = 0
+            while not norm_done and norm_steps < 350:
+                norm_steps += 1
+                if random.random() < 0.05:
+                    norm_action = random.randint(0, NUM_ACTIONS - 1)
+                else:
+                    with torch.no_grad():
+                        s_t = torch.tensor(norm_state, dtype=torch.float32, device=self.device).unsqueeze(0)
+                        norm_action = int(self.policy_net(s_t).argmax(dim=1).item())
+
+                _, n_reward, norm_done, n_info = self.env.step(norm_action)
+                n_next_state = self.env.get_continuous_state(dim=self.cfg.input_dim)
+
+                if norm_action != norm_prev_action and norm_steps > 1:
+                    n_reward -= self.cfg.jitter_penalty
+                norm_prev_action = norm_action
+
+                self.replay_buffer.push(norm_state, norm_action, n_reward, n_next_state, norm_done)
+                norm_state = n_next_state
+                if len(self.replay_buffer) >= 32:
+                    self.train_step(batch_size=min(64, len(self.replay_buffer)))
 
             pbar.set_postfix({
                 "Saved": f"{total_saved}/{idx}",
@@ -945,22 +996,25 @@ class DQNTrainer:
         print("=" * 65)
         print(f"Failure Clinic Finished! Successfully saved {total_saved} / {len(failures)} shots ({(total_saved / max(1, len(failures)))*100:.1f}%)")
 
-        # Rigorous Two-Phase evaluation before saving to prevent policy degradation
-        print("\nEvaluating post-clinic policy in pure greedy mode (Phase 1: 40 episodes)...")
-        post_hits, post_goals, post_score, post_max = self.evaluate(n_episodes=40)
+        print(f"Restoring base Learning Rate to {original_lr:.6f} for evaluation...")
+        for param_group in self.optimizer.param_groups:
+            param_group['lr'] = original_lr
+
+        # Rigorous evaluation before saving to prevent policy degradation
+        print(f"\nEvaluating post-clinic policy in pure greedy mode ({eval_episodes} episodes)...")
+        post_hits, post_goals, post_score, post_max = self.evaluate(n_episodes=eval_episodes, show_progress=True)
+        print(
+            f"Post-clinic Skill | "
+            f"Avg Hits: {post_hits:.2f} | Goals: {post_goals:.2f} ({int(post_goals*100)}%) | Robust Score: {post_score:.2f} | Max: {post_max} hits"
+        )
 
         saved_successfully = False
         if post_score > self.best_score:
-            print(f" -> Potential improvement ({post_score:.2f} > {self.best_score:.2f}). Running 100 confirmation episodes...")
-            conf_hits, conf_goals, conf_score, conf_max = self.evaluate(n_episodes=100)
-            if conf_score > self.best_score:
-                print(f" -> Clinic improvement CONFIRMED! ({conf_score:.2f} > {self.best_score:.2f}). Saving to disk...")
-                self.best_score = conf_score
-                self.best_weights = copy.deepcopy(self.policy_net.state_dict())
-                self.save_model_to_disk()
-                saved_successfully = True
-            else:
-                print(f" -> Clinic improvement REJECTED. Confirmation score was only {conf_score:.2f} <= {self.best_score:.2f}.")
+            print(f" -> Clinic improvement CONFIRMED! ({post_score:.2f} > {self.best_score:.2f}). Saving to disk...")
+            self.best_score = post_score
+            self.best_weights = copy.deepcopy(self.policy_net.state_dict())
+            self.save_model_to_disk()
+            saved_successfully = True
         else:
             print(f" -> Post-clinic score ({post_score:.2f}) did not exceed baseline ({self.best_score:.2f}).")
 
@@ -986,6 +1040,13 @@ def main():
         choices=["q_learning", "tabular", "dqn", "heuristic"],
         default="q_learning",
         help="Algorithm to train or evaluate: 'q_learning' (tabular), 'dqn' (neural network), or 'heuristic'"
+    )
+    parser.add_argument(
+        "--model_variant",
+        type=str,
+        choices=["classic", "noblind"],
+        default="classic",
+        help="DQN variant: 'classic' (4D ball-only) or 'noblind' (5D with opponent position)"
     )
     parser.add_argument(
         "--episodes",
@@ -1045,7 +1106,13 @@ def main():
         "--train_failures",
         type=str,
         default=None,
-        help="Path to failed_shots.json for targeted failure replay training"
+        help="Path to failed_shots.jsonl for targeted failure replay training"
+    )
+    parser.add_argument(
+        "--max_failures",
+        type=int,
+        default=250,
+        help="Maximum number of failures to sample per clinic session to prevent overfitting"
     )
     parser.add_argument(
         "--attempts_per_shot",
@@ -1112,7 +1179,7 @@ def main():
             max_hits = int(max(hits_list)) if hits_list else 0
 
             hit_score = (avg_hits + p50_hits + p25_hits) / 3.0 - (iqr_hits / 4.0)
-            score = (hit_score + avg_goals * 5.0) if args.opponent == "heuristic" else hit_score
+            score = (hit_score + avg_goals * 30.0) if args.opponent == "heuristic" else hit_score
         elif args.algo == "q_learning":
             model_file = args.pretrained or "models/q_table.npy"
             print(f"   - Model: {model_file}")
@@ -1135,15 +1202,17 @@ def main():
             if model_path.endswith(".onnx"):
                 import onnxruntime as ort
                 session = ort.InferenceSession(model_path, providers=['CPUExecutionProvider'])
-                input_name = session.get_inputs()[0].name
+                input_meta = session.get_inputs()[0]
+                input_name = input_meta.name
+                input_dim = input_meta.shape[1] if len(input_meta.shape) > 1 and isinstance(input_meta.shape[1], int) else (5 if "noblind" in model_path else 4)
                 env = FastPongEnv(opponent=args.opponent, opp_speed_ratio=1.0)
                 hits_list = []
                 goals_list = []
-                ep_iter = tqdm(range(eval_episodes), desc="Evaluating (ONNX Runtime)", unit="ep")
-                st_buf = np.empty((1, 4), dtype=np.float32)
+                ep_iter = tqdm(range(eval_episodes), desc=f"Evaluating ONNX Runtime ({input_dim}D)", unit="ep")
+                st_buf = np.empty((1, input_dim), dtype=np.float32)
                 for _ in ep_iter:
                     env.reset()
-                    state = env.get_continuous_state()
+                    state = env.get_continuous_state(dim=input_dim)
                     done = False
                     steps = 0
                     ep_hits = 0
@@ -1158,7 +1227,7 @@ def main():
                             ep_hits += 1
                         if info.get("scored_goal"):
                             ep_goals += 1
-                        state = env.get_continuous_state()
+                        state = env.get_continuous_state(dim=input_dim)
                     hits_list.append(ep_hits)
                     goals_list.append(ep_goals)
 
@@ -1170,9 +1239,12 @@ def main():
                 avg_goals = float(np.mean(goals_list)) if goals_list else 0.0
                 max_hits = int(max(hits_list)) if hits_list else 0
                 hit_score = (avg_hits + p50_hits + p25_hits) / 3.0 - (iqr_hits / 4.0)
-                score = (hit_score + avg_goals * 5.0) if args.opponent == "heuristic" else hit_score
+                score = (hit_score + avg_goals * 30.0) if args.opponent == "heuristic" else hit_score
             else:
+                target_input_dim = 5 if (args.model_variant == "noblind" or "noblind" in model_path) else 4
                 dqn_cfg = DQNConfig(
+                    input_dim=target_input_dim,
+                    model_variant="noblind" if target_input_dim == 5 else "classic",
                     opponent=args.opponent,
                     pretrained_path=model_path,
                     skip_baseline_eval=True
@@ -1190,19 +1262,28 @@ def main():
         return
 
     if args.train_failures:
+        opponent = args.opponent if args.opponent != "fronton" else "heuristic"
+        is_noblind = (args.model_variant == "noblind")
+        target_dim = 5 if is_noblind else 4
+        default_save = "models/dqn_noblind.pth" if is_noblind else "models/dqn_pong.pth"
         dqn_cfg = DQNConfig(
-            save_path=args.save_path or "models/dqn_pong.pth",
-            pretrained_path=args.pretrained or "models/dqn_pong.pth",
+            input_dim=target_dim,
+            model_variant=args.model_variant,
+            save_path=args.save_path or default_save,
+            pretrained_path=args.pretrained or default_save,
             max_steps=args.max_steps,
-            skip_baseline_eval=True
+            skip_baseline_eval=True,
+            opponent=opponent
         )
         if args.lr is not None:
             dqn_cfg.lr = args.lr
         trainer = DQNTrainer(dqn_cfg)
         trainer.train_failures(
             args.train_failures,
+            max_failures=args.max_failures,
             attempts_per_shot=args.attempts_per_shot,
-            anchor_episodes=args.anchor_episodes
+            anchor_episodes=args.anchor_episodes,
+            eval_episodes=args.episodes or 200
         )
         return
 
@@ -1223,10 +1304,15 @@ def main():
         TabularTrainer(cfg).train()
 
     elif args.algo == "dqn":
+        is_noblind = (args.model_variant == "noblind")
+        target_dim = 5 if is_noblind else 4
+        default_save = "models/dqn_noblind.pth" if is_noblind else "models/dqn_pong.pth"
         dqn_cfg = DQNConfig(
+            input_dim=target_dim,
+            model_variant=args.model_variant,
             total_episodes=args.episodes or 1200,
             opponent=args.opponent,
-            save_path=args.save_path or "models/dqn_pong.pth",
+            save_path=args.save_path or default_save,
             pretrained_path=args.pretrained,
             max_steps=args.max_steps
         )

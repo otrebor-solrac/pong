@@ -129,20 +129,35 @@ Key arguments:
 Refine the continuous neural policy with PyTorch and automatically re-export the optimized ONNX model:
 
 ```bash
+# Classic 4D DQN (ball trajectory perception)
 make train-dqn ARGS="--pretrained models/dqn_pong.pth --opponent heuristic --episodes 500 --epsilon_start 0.15 --lr 0.00015"
+
+# Tactical 5D DQN No-Blind (from scratch against heuristic opponent)
+make train-dqn-noblind ARGS="--episodes 600 --opponent heuristic"
+
+# Tactical 5D DQN No-Blind (fine-tuning from existing checkpoint)
+make train-dqn-noblind ARGS="--pretrained models/dqn_noblind.pth --opponent heuristic --episodes 600 --epsilon_start 0.2 --lr 0.00015"
 ```
 
 Key arguments:
-- `--pretrained models/dqn_pong.pth`: Loads trained PyTorch weights for transfer learning.
-- `--lr 0.00015`: Uses a conservative Adam learning rate to avoid destabilizing previously converged feature representations.
-- `--episodes 500`: Performs targeted adaptation runs before saving both PyTorch (`.pth`) and ONNX (`.onnx`) checkpoints.
+- `--pretrained models/dqn_noblind.pth`: Loads trained PyTorch weights for transfer learning and baseline protection.
+- `--model_variant noblind`: Trains the 5-dimensional continuous state vector `[dx, dy, vx, vy, opp_y_norm]`.
+- `--opponent heuristic`: Trains against the intelligent bot so the model learns offensive angle placement and scoring.
+- `--epsilon_start 0.2`: Reduces exploration to refine existing defensive behavior into offensive counters.
+- `--lr 0.00015`: Uses a conservative Adam learning rate to avoid catastrophic forgetting.
+- `--episodes 600`: Number of fine-tuning episodes before re-exporting PyTorch (`.pth`) and ONNX (`.onnx`) checkpoints.
 
 ### Failure-targeted fine-tuning
 
-When playing in the web interface with failure recording enabled, missed shots are automatically recorded to `data/failed_shots.json`. You can run a dedicated clinic fine-tuning run targeting only those specific trajectories:
+When playing in the web interface with failure recording enabled, missed shots are automatically recorded to `data/failed_shots.jsonl`. You can run a dedicated clinic fine-tuning run targeting only those specific trajectories:
 
 ```bash
 make train-failures
+```
+
+To fine-tune DQN with failure clinic using custom flags:
+```bash
+make train-failures ARGS="--pretrained models/dqn_noblind.pth --model_variant noblind"
 ```
 
 ### Evaluating trained models
@@ -153,8 +168,11 @@ Evaluate pure greedy performance ($\epsilon = 0$) over 200 benchmark episodes:
 # Evaluate tabular Q-learning
 make eval-tabular
 
-# Evaluate deep Q-network
+# Evaluate classic 4D deep Q-network
 make eval-dqn
+
+# Evaluate tactical 5D DQN No-Blind
+make eval-dqn-noblind
 ```
 
 ### Hot-reloading weights in the live web session
@@ -186,8 +204,10 @@ pong/
 │   └── pong_physics/       # Unified physics implementation (C-ABI and WebAssembly)
 ├── models/
 │   ├── q_table.npy         # Trained tabular weights
-│   ├── dqn_pong.onnx       # Exported deep Q-network in ONNX format
-│   └── dqn_pong.pth        # PyTorch checkpoint weights
+│   ├── dqn_pong.onnx       # Exported 4D deep Q-network in ONNX format
+│   ├── dqn_pong.pth        # PyTorch 4D checkpoint weights
+│   ├── dqn_noblind.onnx    # Exported 5D tactical deep Q-network in ONNX format
+│   └── dqn_noblind.pth     # PyTorch 5D tactical checkpoint weights
 ├── Dockerfile
 ├── docker-compose.yml
 ├── Makefile

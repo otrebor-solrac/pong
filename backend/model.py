@@ -71,7 +71,9 @@ class PongQAgent:
         self.q_table: Optional[np.ndarray] = None
         # PyTorch DQN Model
         self.dqn_model = None
-        # Optimized ONNX Runtime Session
+        # Optimized ONNX Runtime Sessions (4D Classic and 5D No-Blind)
+        self.onnx_session_4d = None
+        self.onnx_session_5d = None
         self.onnx_session = None
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -81,6 +83,7 @@ class PongQAgent:
     def load_onnx_model(self, filepath: str = "models/dqn_pong.onnx") -> bool:
         """
         Load optimized ONNX model using ONNX Runtime for high-performance inference.
+        Detects model dimensionality (4D or 5D) and routes to onnx_session_4d or onnx_session_5d.
         """
         base_dir = os.path.dirname(os.path.abspath(__file__))
         candidates = [
@@ -90,7 +93,8 @@ class PongQAgent:
             os.path.join(base_dir, "..", "models", os.path.basename(filepath)),
             os.path.join("/workspace", filepath),
             "/workspace/rl_lab/pong/models/dqn_pong.onnx",
-            os.path.join(base_dir, "..", "models", "dqn_pong.onnx")
+            os.path.join(base_dir, "..", "models", "dqn_pong.onnx"),
+            os.path.join(base_dir, "..", "models", "dqn_noblind.onnx")
         ]
 
         resolved = None
@@ -106,13 +110,23 @@ class PongQAgent:
         try:
             avail = ort.get_available_providers()
             providers = ['CUDAExecutionProvider', 'CPUExecutionProvider'] if 'CUDAExecutionProvider' in avail else ['CPUExecutionProvider']
-            self.onnx_session = ort.InferenceSession(resolved, providers=providers)
+            session = ort.InferenceSession(resolved, providers=providers)
+            in_dim = session.get_inputs()[0].shape[1] if len(session.get_inputs()[0].shape) > 1 and isinstance(session.get_inputs()[0].shape[1], int) else (5 if "noblind" in resolved else 4)
+
+            if in_dim == 5 or "noblind" in resolved:
+                self.onnx_session_5d = session
+                self.onnx_path_5d = resolved
+                self.last_onnx_5d_mtime = os.path.getmtime(resolved)
+                print(f"[PongQAgent] 5D No-Blind ONNX loaded from {resolved} (Providers: {providers})!")
+            else:
+                self.onnx_session_4d = session
+                self.onnx_session = session
+                self.onnx_path = resolved
+                self.last_onnx_mtime = os.path.getmtime(resolved)
+                print(f"[PongQAgent] 4D Classic ONNX loaded from {resolved} (Providers: {providers})!")
+
             self.model_loaded = True
             self.model_path = resolved
-            self.onnx_path = resolved
-            self.last_onnx_mtime = os.path.getmtime(resolved)
-            self.mode = "dqn"
-            print(f"[PongQAgent] ONNX model loaded successfully from {resolved} (Providers: {providers})!")
             return True
         except Exception as e:
             print(f"[PongQAgent] Error initializing ONNX session from {resolved}: {e}")
@@ -120,12 +134,12 @@ class PongQAgent:
 
     def check_auto_reload(self) -> bool:
         """
-        Check if the ONNX or Q-table model files on disk were modified and hot-reload them seamlessly.
+        Check if ONNX (4D / 5D) or Q-table model files on disk were modified and hot-reload them seamlessly.
         """
         reloaded = False
         base_dir = os.path.dirname(os.path.abspath(__file__))
 
-        # 1. Check ONNX file
+        # 1. Check Classic 4D ONNX file
         onnx_candidates = [
             getattr(self, "onnx_path", None),
             "models/dqn_pong.onnx",
@@ -138,14 +152,34 @@ class PongQAgent:
                     mtime = os.path.getmtime(p)
                     last_mtime = getattr(self, "last_onnx_mtime", 0.0)
                     if mtime > last_mtime:
-                        print(f"[PongQAgent] Detected updated ONNX weights ({mtime} > {last_mtime}). Hot-reloading...")
+                        print(f"[PongQAgent] Detected updated 4D ONNX weights ({mtime} > {last_mtime}). Hot-reloading...")
                         if self.load_onnx_model(p):
                             reloaded = True
                             break
                 except Exception as e:
-                    print(f"[PongQAgent] Auto-reload ONNX warning: {e}")
+                    print(f"[PongQAgent] Auto-reload 4D ONNX warning: {e}")
 
-        # 2. Check Q-table file
+        # 2. Check No-Blind 5D ONNX file
+        onnx_5d_candidates = [
+            getattr(self, "onnx_path_5d", None),
+            "models/dqn_noblind.onnx",
+            os.path.join(base_dir, "..", "models", "dqn_noblind.onnx"),
+            "/workspace/models/dqn_noblind.onnx"
+        ]
+        for p in onnx_5d_candidates:
+            if p and os.path.isfile(p):
+                try:
+                    mtime = os.path.getmtime(p)
+                    last_mtime = getattr(self, "last_onnx_5d_mtime", 0.0)
+                    if mtime > last_mtime:
+                        print(f"[PongQAgent] Detected updated 5D ONNX weights ({mtime} > {last_mtime}). Hot-reloading...")
+                        if self.load_onnx_model(p):
+                            reloaded = True
+                            break
+                except Exception as e:
+                    print(f"[PongQAgent] Auto-reload 5D ONNX warning: {e}")
+
+        # 3. Check Q-table file
         q_candidates = [
             getattr(self, "q_table_path", None),
             "models/q_table.npy",
@@ -313,6 +347,7 @@ class PongQAgent:
         ball_vy: float,
         paddle_x: float = 770.0,
         paddle_y: float = 250.0,
+        player_paddle_y: Optional[float] = None,
         field_width: float = 800.0,
         field_height: float = 500.0
     ) -> Tuple[int, Dict[str, Any]]:
@@ -340,7 +375,48 @@ class PongQAgent:
         q_values = [0.0, 0.0, 0.0]
         
         # 2. Action selection depending on mode
-        if self.mode == "dqn" and (self.onnx_session is not None or self.dqn_model is not None):
+        if self.mode in ["dqn_noblind", "dqn_5d"]:
+            # -----------------------------------------------------------------
+            # 5D Tactical DQN Inference (No-Blind with Opponent Position)
+            # -----------------------------------------------------------------
+            max_dx = FIELD_WIDTH - PADDLE_OFFSET_X
+            max_dy = FIELD_HEIGHT - PADDLE_HEIGHT / 2.0 - BALL_SIZE / 2.0
+            max_v = MAX_BALL_SPEED
+
+            dx = abs(paddle_x - ball_x)
+            dx_norm = float(np.clip(dx / max_dx, 0.0, 1.0))
+            dy = ball_y - paddle_y
+            dy_norm = float(np.clip(dy / max_dy, -1.0, 1.0))
+
+            vx_eff = ball_vx if paddle_x >= (FIELD_WIDTH / 2.0) else -ball_vx
+            vx_norm = float(np.clip(vx_eff / max_v, -1.0, 1.0))
+            vy_norm = float(np.clip(ball_vy / max_v, -1.0, 1.0))
+
+            opp_y = player_paddle_y if player_paddle_y is not None else (field_height / 2.0)
+            opp_y_norm = float(np.clip((opp_y - field_height / 2.0) / (field_height / 2.0), -1.0, 1.0))
+
+            continuous_state_5d = np.array([[dx_norm, dy_norm, vx_norm, vy_norm, opp_y_norm]], dtype=np.float32)
+
+            if self.onnx_session_5d is None:
+                self.load_onnx_model("models/dqn_noblind.onnx")
+
+            if self.onnx_session_5d is not None:
+                input_name = self.onnx_session_5d.get_inputs()[0].name
+                q_out = self.onnx_session_5d.run(None, {input_name: continuous_state_5d})[0]
+                q_values = q_out[0].tolist()
+                action = int(np.argmax(q_values))
+            else:
+                # Fallback to 4D session if 5D weights have not yet been trained
+                sess_4d = self.onnx_session_4d or self.onnx_session
+                if sess_4d is not None:
+                    input_name = sess_4d.get_inputs()[0].name
+                    q_out = sess_4d.run(None, {input_name: continuous_state_5d[:, :4]})[0]
+                    q_values = q_out[0].tolist()
+                    action = int(np.argmax(q_values))
+                else:
+                    action = int(np.random.choice([ACTION_STAY, ACTION_UP, ACTION_DOWN]))
+
+        elif self.mode == "dqn" and (self.onnx_session_4d is not None or self.onnx_session is not None or self.dqn_model is not None):
             # -----------------------------------------------------------------
             # Continuous DQN Neural Network Inference (ONNX / PyTorch)
             # -----------------------------------------------------------------
@@ -360,10 +436,11 @@ class PongQAgent:
 
             continuous_state = np.array([[dx_norm, dy_norm, vx_norm, vy_norm]], dtype=np.float32)
 
-            if self.onnx_session is not None:
+            sess_4d = self.onnx_session_4d or self.onnx_session
+            if sess_4d is not None:
                 # Ultrafast optimized inference with ONNX Runtime
-                input_name = self.onnx_session.get_inputs()[0].name
-                q_out = self.onnx_session.run(None, {input_name: continuous_state})[0]
+                input_name = sess_4d.get_inputs()[0].name
+                q_out = sess_4d.run(None, {input_name: continuous_state})[0]
                 q_values = q_out[0].tolist()
                 action = int(np.argmax(q_values))
             else:

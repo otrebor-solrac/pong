@@ -16,26 +16,15 @@ Detailed analysis of recorded trajectories reveals the primary root cause: **Mar
 
 ---
 
-## 5.2 Structured failure persistence (failed_shots.json)
+## 5.2 Structured failure persistence (failed_shots.jsonl)
 
 To facilitate systematic diagnostics and counterfactual training, the environment records state snapshots whenever the agent concedes an unforced goal:
 
 ```json
-[
-  {
-    "ball_x": 420.5,
-    "ball_y": 485.2,
-    "ball_vx": 8.4,
-    "ball_vy": 6.8,
-    "p1_y": 250.0,
-    "p2_y": 180.0,
-    "speed": 10.81,
-    "rally_hits": 4
-  }
-]
+{"id": 1, "agent_mode": "dqn", "agent_side": "p1", "rally_hits": 4, "peak_speed": 10.81, "shot_origin": {"ball_x": 420.5, "ball_y": 485.2, "ball_vx": 8.4, "ball_vy": 6.8, "paddle_y": 180.0}, "miss_impact": {"ball_x": 30.0, "ball_y": 120.0, "paddle_y": 250.0}}
 ```
 
-By persisting these failure scenarios to `data/failed_shots.json`, the training system converts random runtime failures into a deterministic, reproducible diagnostic benchmark.
+By persisting these failure scenarios to `data/failed_shots.jsonl` via atomic append operations, the training system converts random runtime failures into a deterministic, reproducible diagnostic benchmark.
 
 ---
 
